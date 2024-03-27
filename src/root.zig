@@ -166,7 +166,20 @@ pub fn Parser(comptime O: type) type {
             }.f };
         }
 
-        // TODO mapVoid
+        pub fn mapVoid(comptime self: Self) Parser(void) {
+            return Parser(void) { .parse = struct {
+                const R = Result(void);
+                fn f(input: []const u8, allocator: std.mem.Allocator) R {
+                    var r = self.parse(input, allocator);
+                    if (r.rst) |_| {
+                        r.drop();
+                        return R { .mov = r.mov, .rst = {} };
+                    } else |err| {
+                        return R { .mov = r.mov, .rst = err };
+                    }
+                }
+            }.f };
+        }
 
         pub fn prefix(comptime self: Self, comptime pfx: Parser(void)) Parser(O) {
             return Parser(O) { .parse = struct {
