@@ -25,7 +25,7 @@ fn toRGB(l: pom.List(u8), _: std.mem.Allocator) ?RGB {
     };
 }
 
-const digit = pom.ascii.digit(.Hex);
+const digit = pom.terminal.digit(.Hex);
 
 const color2: pom.Parser(u8) =
     digit.times(2).slice().map(u8, hex2u8)
@@ -45,8 +45,8 @@ const rgb: pom.Parser(RGB) = pom.Choice(RGB)
     .with(rgb6)
     .with(rgb3)
     .build()
-    .prefix(pom.ascii.literal("#"))
-    .suffix(pom.ascii.anychar.pred(false))
+    .prefix(pom.terminal.literal("#"))
+    .suffix(pom.terminal.anychar.pred(false))
 ;
 
 test "rgb6" {

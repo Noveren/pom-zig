@@ -70,7 +70,7 @@ fn Result(comptime Ok: type) type {
 }
 
 // TODO 支持 utf-8
-pub const ascii = struct {
+pub const terminal = struct {
     pub const anychar = Parser(void) { .parse = struct {
         const R = Result(void);
         fn f(input: []const u8, _: std.mem.Allocator) R {
@@ -220,7 +220,7 @@ pub fn Parser(comptime O: type) type {
         // ========================================================
 
         pub fn oneMore(comptime self: Self) Parser(List(O)) {
-            return Parser(List(O)) { .parse = self.times(0) };
+            return self.times(0);
         }
 
         pub fn times(comptime self: Self, comptime N: usize) Parser(List(O)) {
@@ -323,13 +323,13 @@ pub const nop = Parser(void) { .parse = struct {
 }.f };
 
 test "ascii literal and slice" {
-    const p1 = comptime ascii.literal("null");
+    const p1 = comptime terminal.literal("null");
     var r1 = p1.parse("null", std.testing.allocator);
     defer r1.drop();
     try expectEqual(true, r1.isOk());
     try expectEqual(4, r1.mov);
 
-    const p2 = comptime ascii.literal("null").slice();
+    const p2 = comptime terminal.literal("null").slice();
     var r2 = p2.parse("null", std.testing.allocator);
     defer r2.drop();
     try expectEqual(true, r2.isOk());
