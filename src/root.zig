@@ -82,8 +82,8 @@ pub const terminal = struct {
         }
     }.f };
 
-    pub fn tU8(comptime ch: u8) PVoid {
-        return PVoid { .parse = struct {
+    pub fn tU8(comptime ch: u8) Void {
+        return Void { .parse = struct {
             const R = Result(void);
             fn f(input: []const u8, _: std.mem.Allocator) R {
                 if (input.len == 0) {
@@ -98,8 +98,8 @@ pub const terminal = struct {
         }.f};
     }
 
-    pub fn tU8Choice(comptime choice: []const u8) PVoid {
-        return PVoid { .parse = struct {
+    pub fn tU8Choice(comptime choice: []const u8) Void {
+        return Void { .parse = struct {
             const R = Result(void);
             fn f(input: []const u8, _: std.mem.Allocator) R {
                 if (input.len == 0) {
@@ -165,7 +165,7 @@ pub const terminal = struct {
     }
 };
 
-pub const PVoid = Parser(void);
+pub const Void = Parser(void);
 pub fn Parser(comptime O: type) type {
     return struct {
         parse: *const fn([]const u8, std.mem.Allocator) Result(O),

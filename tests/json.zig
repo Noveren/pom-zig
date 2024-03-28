@@ -10,6 +10,78 @@ fn expectEqual(expect: anytype, actual: anytype) !void {
     }
 }
 
+// ================================================================
+const whitespace: pom.Void = pom.terminal.tU8Choice("\x20\x09\x0A\x0D")
+    .oneMore()
+    .optional()
+;
+
+test "whitespace" {
+    inline for (.{
+        " ", "\n", "\r", "\t", "\x20\x09\x0A\x0D"
+    }) |i| {
+        const r = whitespace.parse(i, std.testing.allocator);
+        try std.testing.expect(r.isOk());
+    }
+}
+
+const dec: pom.Void = pom.terminal.digit(.Dec);
+
+/// integer <- '-'? (('0' !dec) / (!'0' dec+))
+const integer: pom.Void = pom.Choice(void)
+    .with(pom.terminal.tU8('0').suffix(dec.pred(false)))
+    .with(dec.oneMore().mapVoid().prefix(pom.terminal.tU8('0').pred(false)))
+    .build()
+    .prefix(pom.terminal.tU8('-').optional())
+;
+
+/// fraction <- '.' dec+
+const fraction: pom.Void =
+    dec.oneMore().mapVoid().prefix(pom.terminal.tU8('.'))
+;
+
+/// exponent <- ('e' / 'E') ('+' / '-')? dec+
+const exponent: pom.Void = pom.Sequence(void)
+    .with(pom.Choice(void)
+        .with(pom.terminal.tU8('e'))
+        .with(pom.terminal.tU8('E'))
+        .build())
+    .with(pom.Choice(void)
+        .with(pom.terminal.tU8('+'))
+        .with(pom.terminal.tU8('-'))
+        .build()
+        .optional())
+    .with(dec.oneMore().mapVoid())
+    .build()
+    .mapVoid()
+;
+
+const colon:     pom.Void = pom.terminal.tU8(':');
+const comma:     pom.Void = pom.terminal.tU8(',');
+const lbracket:  pom.Void = pom.terminal.tU8('[');
+const rbracket:  pom.Void = pom.terminal.tU8(']');
+const lcurly:    pom.Void = pom.terminal.tU8('{');
+const rcurly:    pom.Void = pom.terminal.tU8('}');
+const tnull:     pom.Void = pom.terminal.tU8s("null");
+const ttrue:     pom.Void = pom.terminal.tU8s("true");
+const tfalse:    pom.Void = pom.terminal.tU8s("false");
+/// TODO 支持转义、utf-8
+const tstring:   pom.Void = pom.terminal.anychar.prefix(pom.terminal.tU8('\"').pred(false))
+    // TODO oneMoreVoid
+    .oneMore().mapVoid()
+    .prefix(pom.terminal.tU8('\"'))
+    .suffix(pom.terminal.tU8('\"'))
+;
+const tnumber:   pom.Void = pom.Sequence(void)
+    .with(integer)
+    .with(fraction.optional())
+    .with(exponent.optional())
+    .build()
+    // TODO SequenceVoid
+    .mapVoid()
+;
+
+// ================================================================
 const Json = union(enum) {
     Null,
     Boolean: bool,
@@ -19,16 +91,9 @@ const Json = union(enum) {
 
     pub fn deinit(self: Json) void {
         switch (self) {
-            .String => |s| {
-                // std.debug.print("string deinit\n", .{});
-                s.deinit();
-            },
-            .Array => |a| {
-                // std.debug.print("array deinit\n", .{});
-                for (a.items) |i| i.deinit();
-                a.deinit();
-            },
-            else => {},
+            .String => |s| s.deinit(),
+            .Array  => |a| { for (a.items) |i| i.deinit(); a.deinit(); },
+            else    => {},
         }
     }
 
@@ -38,17 +103,15 @@ const Json = union(enum) {
     } 
 };
 
-const whitespace: pom.PVoid = pom.terminal.cU8Choice("\x20\x09\x0A\x0D");
-
-/// literal <- "null" | "true" | "false"
+/// literal <- (tnull | ttrue | tfalse) whitespace
 const literal: pom.Parser(Json) = pom.Choice(Json)
-    .with(pom.terminal.tU8s("null").map(Json, struct { fn f(_: void, _: std.mem.Allocator) ?Json {
+    .with(tnull.map(Json, struct { fn f(_: void, _: std.mem.Allocator) ?Json {
         return Json { .Null = {} };
     }}.f))
-    .with(pom.terminal.tU8s("true").map(Json, struct { fn f(_: void, _: std.mem.Allocator) ?Json {
+    .with(ttrue.map(Json, struct { fn f(_: void, _: std.mem.Allocator) ?Json {
         return Json { .Boolean = true };
     }}.f))
-    .with(pom.terminal.tU8s("false").map(Json, struct { fn f(_: void, _: std.mem.Allocator) ?Json {
+    .with(tfalse.map(Json, struct { fn f(_: void, _: std.mem.Allocator) ?Json {
         return Json { .Boolean = false };
     }}.f))
     .build()
@@ -65,63 +128,8 @@ test "literal" {
     try expectEqual(Json { .Boolean = false }, try r3.rst);
 }
 
-const dec: pom.PVoid = pom.terminal.digit(.Dec);
-const dec_0: pom.PVoid = pom.terminal.tU8('0');
-
-/// int <- '-'? (('0' !dec) / (!'0' dec+))
-const int: pom.PVoid = pom.Choice(void)
-    .with(dec_0.suffix(dec.pred(false)))
-    .with(dec.oneMore().mapVoid().prefix(dec_0.pred(false)))
-    .build()
-    .prefix(pom.terminal.tU8('-').optional())
-;
-
-test "int" {
-    inline for (comptime .{
-        "0", "123", "-0", "-123"
-    }) |input| {
-        var r = int.parse(input, std.testing.allocator);
-        try expectEqual(true, r.isOk());
-        try expectEqual(input.len, r.mov);
-    }
-
-    inline for (comptime .{
-        "0123", "+123"
-    }) |input| {
-        var r1 = int.parse(input, std.testing.allocator);
-        try expectEqual(false, r1.isOk());
-    }
-}
-
-const dec_one_more: pom.PVoid = dec.oneMore().mapVoid();
-
-/// frac <- '.' dec+
-const frac: pom.PVoid =
-    dec_one_more.prefix(pom.terminal.tU8('.'))
-;
-
-/// exp <- ('e' / 'E') ('+' / '-')? dec+
-const exp: pom.PVoid = pom.Sequence(void)
-    .with(pom.Choice(void)
-        .with(pom.terminal.tU8('e'))
-        .with(pom.terminal.tU8('E'))
-        .build())
-    .with(pom.Choice(void)
-        .with(pom.terminal.tU8('+'))
-        .with(pom.terminal.tU8('-'))
-        .build()
-        .optional())
-    .with(dec_one_more)
-    .build()
-    .mapVoid()
-;
-
-/// number <- int frac? exp?
-const number: pom.Parser(Json) = pom.Sequence(void)
-    .with(int)
-    .with(frac.optional())
-    .with(exp.optional())
-    .build()
+/// number <- integer fraction? exponent?
+const number: pom.Parser(Json) = tnumber
     .slice()
     .map(Json, struct { fn f(s: []const u8, _: std.mem.Allocator) ?Json {
         return if (std.fmt.parseFloat(f64, s)) |v| Json { .Number = v } else |_| null;
@@ -148,21 +156,11 @@ test "number" {
     }
 }
 
-const single_quotation: pom.PVoid = pom.terminal.tU8('\"');
-
-// TODO 支持转义
-const char: pom.PVoid =
-    pom.terminal.anychar
-    .prefix(single_quotation.pred(false))
-;
-
-/// string <- '"' char+? '"'
-const string: pom.Parser(Json) = char.oneMore().optional().slice()
-    .prefix(single_quotation)
-    .suffix(single_quotation)
+const string: pom.Parser(Json) = tstring
+    .slice()
     .map(Json, struct { fn f(s: []const u8, allocator: std.mem.Allocator) ?Json {
         var str = std.ArrayList(u8).init(allocator);
-        str.appendSlice(s) catch {
+        str.appendSlice(s[1..(s.len - 1)]) catch {
             return null;
         };
         return Json { .String = str };
@@ -180,9 +178,22 @@ test "string" {
     }
 }
 
+const value: pom.Parser(Json) = pom.Choice(Json)
+    .with(literal)
+    .with(number)
+    .with(string)
+    .with(array)
+    .build()
+;
+
+fn valueRef() pom.Parser(Json) {
+    return value;
+}
+
+/// array <- ('[' whitespace) value (whitespace ']')
 const array: pom.Parser(Json) = pom.ref(Json, valueRef)
-    .prefix(pom.terminal.tU8('['))
-    .suffix(pom.terminal.tU8(']'))
+    .prefix(pom.terminal.tU8('[').suffix(whitespace))
+    .suffix(pom.terminal.tU8(']').prefix(whitespace))
     .map(Json, struct { fn f(j: Json, allocator: std.mem.Allocator) ?Json {
         var arr = std.ArrayList(Json).init(allocator);
         arr.append(j) catch {
@@ -193,20 +204,8 @@ const array: pom.Parser(Json) = pom.ref(Json, valueRef)
     }}.f)
 ;
 
-fn valueRef() pom.Parser(Json) {
-    return value;
-}
-
-const value: pom.Parser(Json) = pom.Choice(Json)
-    .with(literal)
-    .with(number)
-    .with(string)
-    .with(array)
-    .build()
-;
-
 test "array" {
-    var r1 = array.parse("[[\"string string\"]]", std.testing.allocator);
+    var r1 = array.parse("[ [\n\"string string\"\t]   ]", std.testing.allocator);
     defer r1.drop();
     try expectEqual(true, r1.isOk());
     // const v1 = try r1.rst;
