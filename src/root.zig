@@ -46,7 +46,7 @@ pub const Err = error {
     FailedToParse,
 } || std.mem.Allocator.Error;
 
-fn Result(comptime Ok: type) type {
+pub fn Result(comptime Ok: type) type {
     return struct {
         mov: usize = 0,
         rst: Err!Ok,
@@ -351,7 +351,7 @@ pub fn Parser(comptime O: type) type {
 }
 
 pub const nop = Parser(void) { .parse = struct {
-     const R = Result(void);
+    const R = Result(void);
     fn f(_: []const u8, _: std.mem.Allocator) R {
         return R { .rst = {} };
     }
@@ -370,6 +370,14 @@ test "ascii tU8s and slice" {
     try expectEqual(true, r2.isOk());
     try expectEqual(4, r2.mov);
     try expectEqual("null", try r2.rst);
+}
+
+pub fn ref(comptime T: type, comptime func: fn() Parser(T)) Parser(T) {
+    return Parser(T) { .parse = struct {
+        fn f(input: []const u8, allocator: std.mem.Allocator) Result(T) {
+            return func().parse(input, allocator);
+        }
+    }.f };
 }
 
 pub fn Sequence(comptime T: type) type {
