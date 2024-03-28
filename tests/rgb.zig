@@ -19,6 +19,7 @@ fn hex2u8(buf: []const u8, _: std.mem.Allocator) ?u8 {
 }
 
 fn toRGB(l: pom.List(u8), _: std.mem.Allocator) ?RGB {
+    defer l.deinit();
     const items = l.getItems();
     return RGB {
         .r = items[0], .g = items[1], .b = items[2], 

@@ -32,40 +32,6 @@ const Json = union(enum) {
         }
     }
 
-    pub fn clone(self: Json) ?Json {
-        switch (self) {
-            .String => |s| {
-                const cloned = s.clone() catch return null;
-                return Json { .String = cloned };
-            },
-            .Array => |a| {
-                var cloned = a.clone() catch return null;
-                for (cloned.items, 0..) |j, i| {
-                    cloned.items[i] = j.clone() orelse {
-                        cloned.deinit();
-                        return null;
-                    };
-                }
-                return Json { .Array = cloned };
-            },
-            else => return self,
-        }
-    }
-
-    // /// TODO 转移所有权，避免拷贝
-    // pub fn move(self: Json) Json {
-    //     switch (self) {
-    //         .String => |s| {
-    //             // s.capacity = 0;
-    //             return Json { .String = std.ArrayList(u8).fromOwnedSlice(s.allocator, s.items) };
-    //         },
-    //         .Array => |_| {
-    //             return self;
-    //         },
-    //         else => return self,
-    //     }
-    // }
-
     pub fn format(self: Json, allocator: std.mem.Allocator) std.ArrayList(u8) {
         _ = self;
         _ = allocator;
@@ -219,9 +185,7 @@ const array: pom.Parser(Json) = pom.ref(Json, valueRef)
     .suffix(pom.terminal.tU8(']'))
     .map(Json, struct { fn f(j: Json, allocator: std.mem.Allocator) ?Json {
         var arr = std.ArrayList(Json).init(allocator);
-        // TODO 实现 move
-        const cloned = j.clone() orelse return null;
-        arr.append(cloned) catch {
+        arr.append(j) catch {
             arr.deinit();
             return null;
         };
@@ -242,9 +206,9 @@ const value: pom.Parser(Json) = pom.Choice(Json)
 ;
 
 test "array" {
-    var r1 = array.parse("[[\"string\"]]", std.testing.allocator);
+    var r1 = array.parse("[[\"string string\"]]", std.testing.allocator);
     defer r1.drop();
     try expectEqual(true, r1.isOk());
-    const v1 = try r1.rst;
-    std.debug.print("{s}\n", .{v1.Array.items[0].Array.items[0].String.items});
+    // const v1 = try r1.rst;
+    // std.debug.print("{s}\n", .{v1.Array.items[0].Array.items[0].String.items});
 }

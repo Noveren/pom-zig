@@ -186,13 +186,13 @@ pub fn Parser(comptime O: type) type {
             }.f };
         }
 
+        /// 对解析结果进行映射；所有权 `map -> map_fn -> map`
         pub fn map(comptime self: Self, comptime M: type, comptime map_fn: fn(O, std.mem.Allocator) ?M) Parser(M) {
             return Parser(M) { .parse = struct {
                 const R = Result(M);
                 fn f(input: []const u8, allocator: std.mem.Allocator) R {
-                    var r = self.parse(input, allocator);
+                    const r = self.parse(input, allocator);
                     if (r.rst) |ok| {
-                        defer r.drop();
                         return R { .mov = r.mov, .rst = map_fn(ok, allocator) orelse Err.FailedToMap };
                     } else |err| {
                         return R { .mov = r.mov, .rst = err };
