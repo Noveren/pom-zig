@@ -226,7 +226,15 @@ const value: pom.Parser(Json) = pom.Choice(Json)
 ;
 
 test "array" {
-    var r1 = array.parse("[\"string\"]", std.testing.allocator);
+    var r1 = array.parse("[[\"string\"]]", std.testing.allocator);
     defer r1.drop();
     try expectEqual(true, r1.isOk());
 }
+
+// const json: pom.Parser(Json) = pom.Choice(Json)
+//     .with(literal)
+//     .with(number)
+//     .with(string)
+//     .with(array)
+//     .build()
+// ;
