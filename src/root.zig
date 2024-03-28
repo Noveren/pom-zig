@@ -82,7 +82,41 @@ pub const terminal = struct {
         }
     }.f };
 
-    pub fn literal(comptime str: []const u8) Parser(void) {
+    pub fn tU8(comptime ch: u8) PVoid {
+        return PVoid { .parse = struct {
+            const R = Result(void);
+            fn f(input: []const u8, _: std.mem.Allocator) R {
+                if (input.len == 0) {
+                    return R { .rst = Err.EOF };
+                }
+                if (input[0] == ch) {
+                    return R { .mov = 1, .rst = {} };
+                } else {
+                    return R { .rst = Err.ExpectForLiteral };
+                }
+            }
+        }.f};
+    }
+
+    pub fn tU8Choice(comptime choice: []const u8) PVoid {
+        return PVoid { .parse = struct {
+            const R = Result(void);
+            fn f(input: []const u8, _: std.mem.Allocator) R {
+                if (input.len == 0) {
+                    return R { .rst = Err.EOF };
+                }
+                for (choice) |ch| {
+                    if (input[0] == ch) {
+                        return R { .mov = 1, .rst = {} };
+                    }
+                } else {
+                    return R { .rst = Err.ExpectForLiteral };
+                }
+            }
+        }.f};
+    }
+
+    pub fn tU8s(comptime str: []const u8) Parser(void) {
         return Parser(void) { .parse = struct {
             const R = Result(void);
             fn f(input: []const u8, _: std.mem.Allocator) R {
@@ -131,6 +165,7 @@ pub const terminal = struct {
     }
 };
 
+pub const PVoid = Parser(void);
 pub fn Parser(comptime O: type) type {
     return struct {
         parse: *const fn([]const u8, std.mem.Allocator) Result(O),
@@ -235,7 +270,7 @@ pub fn Parser(comptime O: type) type {
                         var offset: usize = 0;
                         var r: Result(O) = self.parse(input, allocator);
                         while (r.rst) |ok| : (r = self.parse(input[offset..], allocator)) {
-                            list.append(ok) catch {
+                            if (comptime O != void) list.append(ok) catch {
                                 r.drop();
                                 list.deinit();
                                 return R { .mov = offset, .rst = Err.FailedToParse };
@@ -258,7 +293,7 @@ pub fn Parser(comptime O: type) type {
                         for (0..N) |_| {
                             r = self.parse(input[offset..], allocator);
                             if (r.rst) |ok| {
-                                list.append(ok) catch {
+                                if (comptime O != void) list.append(ok) catch {
                                     r.drop();
                                     list.deinit();
                                     return R { .mov = offset, .rst = Err.FailedToParse };
@@ -322,14 +357,14 @@ pub const nop = Parser(void) { .parse = struct {
     }
 }.f };
 
-test "ascii literal and slice" {
-    const p1 = comptime terminal.literal("null");
+test "ascii tU8s and slice" {
+    const p1 = comptime terminal.tU8s("null");
     var r1 = p1.parse("null", std.testing.allocator);
     defer r1.drop();
     try expectEqual(true, r1.isOk());
     try expectEqual(4, r1.mov);
 
-    const p2 = comptime terminal.literal("null").slice();
+    const p2 = comptime terminal.tU8s("null").slice();
     var r2 = p2.parse("null", std.testing.allocator);
     defer r2.drop();
     try expectEqual(true, r2.isOk());
@@ -346,7 +381,7 @@ pub fn Sequence(comptime T: type) type {
         }
     };
 }
-
+// TODO SequenceVoid
 fn SequenceN(comptime O: type, comptime N: usize) type {
     return struct {
         _parsers: [N]Parser(O),
@@ -370,7 +405,7 @@ fn SequenceN(comptime O: type, comptime N: usize) type {
                     for (self._parsers) |parser| {
                         r = parser.parse(input[offset..], allocator);
                         if (r.rst) |ok| {
-                            list.append(ok) catch {
+                            if (comptime O != void) list.append(ok) catch {
                                 r.drop();
                                 list.deinit();
                                 return R { .mov = offset, .rst = Err.FailedToParse };

@@ -45,7 +45,7 @@ const rgb: pom.Parser(RGB) = pom.Choice(RGB)
     .with(rgb6)
     .with(rgb3)
     .build()
-    .prefix(pom.terminal.literal("#"))
+    .prefix(pom.terminal.tU8('#'))
     .suffix(pom.terminal.anychar.pred(false))
 ;
 
