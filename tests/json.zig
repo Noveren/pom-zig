@@ -3,7 +3,7 @@ const std = @import("std");
 const pom = @import("pom");
 
 fn expectEqual(expect: anytype, actual: anytype) !void {
-    if (@TypeOf(actual) == []const u8) {
+    if (@TypeOf(actual) == []const u8 or @TypeOf(actual) == []u8) {
         return std.testing.expectEqualStrings(expect, actual);
     } else {
         return std.testing.expectEqual(expect, actual);
@@ -127,5 +127,35 @@ test "number" {
         var r = number.parse(i, std.testing.allocator);
         try expectEqual(false, r.isOk());
         try expectEqual(0, r.mov);
+    }
+}
+
+// TODO 支持转义
+const char: pom.Parser(void) =
+    pom.terminal.anychar
+    .prefix(pom.terminal.literal("\"").pred(false))
+;
+
+/// string <- '"' char+? '"'
+const string: pom.Parser(std.ArrayList(u8)) = char.oneMore().optional().slice()
+    .prefix(pom.terminal.literal("\""))
+    .suffix(pom.terminal.literal("\""))
+    .map(std.ArrayList(u8), struct { fn f(s: []const u8, allocator: std.mem.Allocator) ?std.ArrayList(u8) {
+        var str = std.ArrayList(u8).init(allocator);
+        str.appendSlice(s) catch {
+            return null;
+        };
+        return str;
+    }}.f)
+;
+
+test "string" {
+    const r1 = string.parse("\"string\"", std.testing.allocator);
+    if (r1.rst) |ok| {
+        defer ok.deinit();
+        try expectEqual("string", ok.items);
+    } else |err| {
+        std.debug.print("{any} {d}\n", .{err, r1.mov});
+        try expectEqual(false, true);
     }
 }
