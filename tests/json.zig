@@ -11,7 +11,7 @@ fn expectEqual(expect: anytype, actual: anytype) !void {
 }
 
 // ================================================================
-const whitespace: pom.Void = pom.terminal.tU8Choice("\x20\x09\x0A\x0D")
+const whitespace: pom.Void = pom.U8.choice("\x20\x09\x0A\x0D")
     .oneMore()
     .optional()
 ;
@@ -25,60 +25,58 @@ test "whitespace" {
     }
 }
 
-const dec: pom.Void = pom.terminal.digit(.Dec);
+const dec: pom.Void = pom.U8.asciiDigit(10);
 
 /// integer <- '-'? (('0' !dec) / (!'0' dec+))
 const integer: pom.Void = pom.Choice(void)
-    .with(pom.terminal.tU8('0').suffix(dec.pred(false)))
-    .with(dec.oneMore().mapVoid().prefix(pom.terminal.tU8('0').pred(false)))
+    .with(pom.U8.one('0').suffix(dec.pred(false)))
+    .with(dec.oneMore().discard().prefix(pom.U8.one('0').pred(false)))
     .build()
-    .prefix(pom.terminal.tU8('-').optional())
+    .prefix(pom.U8.one('-').optional())
 ;
 
 /// fraction <- '.' dec+
 const fraction: pom.Void =
-    dec.oneMore().mapVoid().prefix(pom.terminal.tU8('.'))
+    dec.oneMore().discard().prefix(pom.U8.one('.'))
 ;
 
 /// exponent <- ('e' / 'E') ('+' / '-')? dec+
 const exponent: pom.Void = pom.Sequence(void)
     .with(pom.Choice(void)
-        .with(pom.terminal.tU8('e'))
-        .with(pom.terminal.tU8('E'))
+        .with(pom.U8.one('e'))
+        .with(pom.U8.one('E'))
         .build())
     .with(pom.Choice(void)
-        .with(pom.terminal.tU8('+'))
-        .with(pom.terminal.tU8('-'))
+        .with(pom.U8.one('+'))
+        .with(pom.U8.one('-'))
         .build()
         .optional())
-    .with(dec.oneMore().mapVoid())
+    .with(dec.oneMore().discard())
     .build()
-    .mapVoid()
+    .discard()
 ;
 
-const colon:     pom.Void = pom.terminal.tU8(':');
-const comma:     pom.Void = pom.terminal.tU8(',');
-const lbracket:  pom.Void = pom.terminal.tU8('[');
-const rbracket:  pom.Void = pom.terminal.tU8(']');
-const lcurly:    pom.Void = pom.terminal.tU8('{');
-const rcurly:    pom.Void = pom.terminal.tU8('}');
-const tnull:     pom.Void = pom.terminal.tU8s("null");
-const ttrue:     pom.Void = pom.terminal.tU8s("true");
-const tfalse:    pom.Void = pom.terminal.tU8s("false");
+const colon:     pom.Void = pom.U8.one(':');
+const comma:     pom.Void = pom.U8.one(',');
+const lbracket:  pom.Void = pom.U8.one('[');
+const rbracket:  pom.Void = pom.U8.one(']');
+const lcurly:    pom.Void = pom.U8.one('{');
+const rcurly:    pom.Void = pom.U8.one('}');
+const tnull:     pom.Void = pom.U8.seq("null");
+const ttrue:     pom.Void = pom.U8.seq("true");
+const tfalse:    pom.Void = pom.U8.seq("false");
 /// TODO 支持转义、utf-8
-const tstring:   pom.Void = pom.terminal.anychar.prefix(pom.terminal.tU8('\"').pred(false))
-    // TODO oneMoreVoid
-    .oneMore().mapVoid()
-    .prefix(pom.terminal.tU8('\"'))
-    .suffix(pom.terminal.tU8('\"'))
+const tstring:   pom.Void = pom.U8.any.prefix(pom.U8.one('\"').pred(false))
+    .oneMore().discard()
+    .prefix(pom.U8.one('\"'))
+    .suffix(pom.U8.one('\"'))
 ;
 const tnumber:   pom.Void = pom.Sequence(void)
     .with(integer)
     .with(fraction.optional())
     .with(exponent.optional())
     .build()
-    // TODO SequenceVoid
-    .mapVoid()
+    .discard()
 ;
 
 // ================================================================
@@ -169,7 +167,7 @@ const string: pom.Parser(Json) = tstring
 
 test "string" {
     var r1 = string.parse("\"string\"", std.testing.allocator);
-    defer r1.drop();
+    defer r1.discard();
     if (r1.rst) |ok| {
         try expectEqual("string", ok.String.items);
     } else |err| {
@@ -192,8 +190,8 @@ fn valueRef() pom.Parser(Json) {
 
 /// array <- ('[' whitespace) value (whitespace ']')
 const array: pom.Parser(Json) = pom.ref(Json, valueRef)
-    .prefix(pom.terminal.tU8('[').suffix(whitespace))
-    .suffix(pom.terminal.tU8(']').prefix(whitespace))
+    .prefix(pom.U8.one('[').suffix(whitespace))
+    .suffix(pom.U8.one(']').prefix(whitespace))
     .map(Json, struct { fn f(j: Json, allocator: std.mem.Allocator) ?Json {
         var arr = std.ArrayList(Json).init(allocator);
         arr.append(j) catch {
@@ -206,7 +204,7 @@ const array: pom.Parser(Json) = pom.ref(Json, valueRef)
 
 test "array" {
     var r1 = array.parse("[ [\n\"string string\"\t]   ]", std.testing.allocator);
-    defer r1.drop();
+    defer r1.discard();
     try expectEqual(true, r1.isOk());
     // const v1 = try r1.rst;
     // std.debug.print("{s}\n", .{v1.Array.items[0].Array.items[0].String.items});

@@ -26,7 +26,7 @@ fn toRGB(l: pom.List(u8), _: std.mem.Allocator) ?RGB {
     };
 }
 
-const digit = pom.terminal.digit(.Hex);
+const digit = pom.U8.asciiDigit(16);
 
 const color2: pom.Parser(u8) =
     digit.times(2).slice().map(u8, hex2u8)
@@ -46,13 +46,13 @@ const rgb: pom.Parser(RGB) = pom.Choice(RGB)
     .with(rgb6)
     .with(rgb3)
     .build()
-    .prefix(pom.terminal.tU8('#'))
-    .suffix(pom.terminal.anychar.pred(false))
+    .prefix(pom.U8.one('#'))
+    .suffix(pom.U8.any.pred(false))
 ;
 
 test "rgb6" {
     var r1 = rgb6.parse("09AF35", std.testing.allocator);    
-    defer r1.drop();
+    defer r1.discard();
     if (r1.rst) |ok| {
         try expectEqual(RGB { .r = 0x09, .g = 0xAF, .b = 0x35 }, ok);
         try expectEqual(6, r1.mov);
@@ -64,7 +64,7 @@ test "rgb6" {
 
 test "rgb3" {
     var r1 = rgb3.parse("9F5", std.testing.allocator);    
-    defer r1.drop();
+    defer r1.discard();
     if (r1.rst) |ok| {
         try expectEqual(RGB { .r = 0x9, .g = 0xF, .b = 0x5 }, ok);
         try expectEqual(3, r1.mov);
@@ -76,7 +76,7 @@ test "rgb3" {
 
 test "rgb" {
     var r1 = rgb.parse("#9F5", std.testing.allocator);    
-    defer r1.drop();
+    defer r1.discard();
     if (r1.rst) |ok| {
         try expectEqual(RGB { .r = 0x9, .g = 0xF, .b = 0x5 }, ok);
         try expectEqual(4, r1.mov);
@@ -86,7 +86,7 @@ test "rgb" {
     }
 
     var r2 = rgb.parse("#09AF35", std.testing.allocator);    
-    defer r2.drop();
+    defer r2.discard();
     if (r2.rst) |ok| {
         try expectEqual(RGB { .r = 0x09, .g = 0xAF, .b = 0x35 }, ok);
         try expectEqual(7, r2.mov);
@@ -96,11 +96,11 @@ test "rgb" {
     }
 
     var r3 = rgb.parse("09AF35", std.testing.allocator);
-    defer r3.drop();
+    defer r3.discard();
     try std.testing.expectError(pom.Err.ExpectForLiteral, r3.rst);
 
     var r4 = rgb.parse("#09AF35 ", std.testing.allocator);
-    defer r4.drop();
+    defer r4.discard();
     try std.testing.expectError(pom.Err.FailedToPred, r4.rst);
 }
     

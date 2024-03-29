@@ -55,7 +55,7 @@ pub fn Result(comptime Ok: type) type {
             return if (self.rst) |_| true else |_| false;
         }
 
-        pub fn drop(self: *@This()) void {
+        pub fn discard(self: *@This()) void {
             const info_Ok: std.builtin.Type = @typeInfo(Ok);
             switch (info_Ok) {
                 else => {},
@@ -69,115 +69,23 @@ pub fn Result(comptime Ok: type) type {
     };
 }
 
-// TODO 支持 utf-8
-pub const terminal = struct {
-    pub const anychar = Parser(void) { .parse = struct {
-        const R = Result(void);
-        fn f(input: []const u8, _: std.mem.Allocator) R {
-            if (input.len > 0) {
-                return R { .mov = 1, .rst = {} };
-            } else {
-                return R { .rst = Err.EOF };
-            }
-        }
-    }.f };
-
-    pub fn tU8(comptime ch: u8) Void {
-        return Void { .parse = struct {
-            const R = Result(void);
-            fn f(input: []const u8, _: std.mem.Allocator) R {
-                if (input.len == 0) {
-                    return R { .rst = Err.EOF };
-                }
-                if (input[0] == ch) {
-                    return R { .mov = 1, .rst = {} };
-                } else {
-                    return R { .rst = Err.ExpectForLiteral };
-                }
-            }
-        }.f};
-    }
-
-    pub fn tU8Choice(comptime choice: []const u8) Void {
-        return Void { .parse = struct {
-            const R = Result(void);
-            fn f(input: []const u8, _: std.mem.Allocator) R {
-                if (input.len == 0) {
-                    return R { .rst = Err.EOF };
-                }
-                for (choice) |ch| {
-                    if (input[0] == ch) {
-                        return R { .mov = 1, .rst = {} };
-                    }
-                } else {
-                    return R { .rst = Err.ExpectForLiteral };
-                }
-            }
-        }.f};
-    }
-
-    pub fn tU8s(comptime str: []const u8) Parser(void) {
-        return Parser(void) { .parse = struct {
-            const R = Result(void);
-            fn f(input: []const u8, _: std.mem.Allocator) R {
-                if (input.len == 0) {
-                    return R { .rst = Err.EOF };
-                }
-
-                if (std.mem.startsWith(u8, input, str)) {
-                    return R { .mov = str.len, .rst = {} };
-                } else {
-                    return R { .rst = Err.ExpectForLiteral };
-                }
-            }
-        }.f };
-    }
-
-    pub const DigitSystem = enum {
-        Bin, Dec, Oct, Hex,
-    };
-
-    pub fn digit(comptime ds: DigitSystem) Parser(void) {
-        return Parser(void) { .parse = struct {
-            const R = Result(void);
-            fn f(input: []const u8, _: std.mem.Allocator) R {
-                if (input.len == 0) {
-                    return R { .rst = Err.EOF };
-                }
-
-                const v: u8 = switch (ds) {
-                    .Bin => if ('0' <= input[0] and input[0] <= '1') input[0] else 0,
-                    .Oct => if ('0' <= input[0] and input[0] <= '7') input[0] else 0,
-                    .Dec => if ('0' <= input[0] and input[0] <= '9') input[0] else 0,
-                    .Hex => switch (input[0]) {
-                        '0'...'9', 'a'...'f', 'A'...'F' => input[0],
-                        else => 0,
-                    },
-                };
-
-                if (v > 0) {
-                    return R { .mov = 1, .rst = {} };
-                } else {
-                    return R { .rst = Err.ExpectForLiteral };
-                }
-            }
-        }.f };
-    }
-};
-
 pub const Void = Parser(void);
 pub fn Parser(comptime O: type) type {
     return struct {
         parse: *const fn([]const u8, std.mem.Allocator) Result(O),
         const Self = @This();
 
+        /// Use `self` to parse `input: []const u8`, 
+        /// then get slice `input[0..r.mov]` and `discard` the result if it parses successfully.
+        /// ```zig
+        /// // TODO
+        /// ```
         pub fn slice(comptime self: Self) Parser([]const u8) {
-            return Parser([]const u8) { .parse = struct {
-                const R = Result([]const u8);
+            return Parser([]const u8) { .parse = struct { const R = Result([]const u8);
                 fn f(input: []const u8, allocator: std.mem.Allocator) R {
                     var r = self.parse(input, allocator);
                     if (r.rst) |_| {
-                        r.drop();
+                        r.discard();
                         return R { .mov = r.mov, .rst = input[0..r.mov] };
                     } else |err| {
                         return R { .mov = r.mov, .rst = err };
@@ -186,10 +94,10 @@ pub fn Parser(comptime O: type) type {
             }.f };
         }
 
-        /// 对解析结果进行映射；所有权 `map -> map_fn -> map`
+        /// Use `map_fn` to map the result of `self` if it parses successfully.
+        /// You have to manage the ownership of the result of `self` like `deinit`
         pub fn map(comptime self: Self, comptime M: type, comptime map_fn: fn(O, std.mem.Allocator) ?M) Parser(M) {
-            return Parser(M) { .parse = struct {
-                const R = Result(M);
+            return Parser(M) { .parse = struct { const R = Result(M);
                 fn f(input: []const u8, allocator: std.mem.Allocator) R {
                     const r = self.parse(input, allocator);
                     if (r.rst) |ok| {
@@ -201,13 +109,14 @@ pub fn Parser(comptime O: type) type {
             }.f };
         }
 
-        pub fn mapVoid(comptime self: Self) Parser(void) {
-            return Parser(void) { .parse = struct {
-                const R = Result(void);
+        /// Dsicard the result of `self` if it parses successfully.
+        /// This method is used to map `Parser(O)` to `Parser(void)`.
+        pub fn discard(comptime self: Self) Void {
+            return Void { .parse = struct { const R = Result(void);
                 fn f(input: []const u8, allocator: std.mem.Allocator) R {
                     var r = self.parse(input, allocator);
                     if (r.rst) |_| {
-                        r.drop();
+                        r.discard();
                         return R { .mov = r.mov, .rst = {} };
                     } else |err| {
                         return R { .mov = r.mov, .rst = err };
@@ -216,13 +125,12 @@ pub fn Parser(comptime O: type) type {
             }.f };
         }
 
-        pub fn prefix(comptime self: Self, comptime pfx: Parser(void)) Parser(O) {
-            return Parser(O) { .parse = struct {
-                const R = Result(O);
+        /// use `pfx: Parser(void)` to check and consume the prefix
+        pub fn prefix(comptime self: Self, comptime pfx: Void) Parser(O) {
+            return Parser(O) { .parse = struct { const R = Result(O);
                 fn f(input: []const u8, allocator: std.mem.Allocator) R {
-                    var r_pfx = pfx.parse(input, allocator);
+                    const r_pfx = pfx.parse(input, allocator);
                     if (r_pfx.rst) |_| {
-                        r_pfx.drop();
                         const r = self.parse(input[r_pfx.mov..], allocator);
                         return R { .mov = r_pfx.mov + r.mov, .rst = r.rst };
                     } else |err| {
@@ -232,9 +140,9 @@ pub fn Parser(comptime O: type) type {
             }.f };
         }
 
+        /// use `sfx: Parser(void)` to check and consume the rest of input parsed by `self`
         pub fn suffix(comptime self: Self, comptime sfx: Parser(void)) Parser(O) {
-            return Parser(O) { .parse = struct {
-                const R = Result(O);
+            return Parser(O) { .parse = struct { const R = Result(O);
                 fn f(input: []const u8, allocator: std.mem.Allocator) R {
                     var r = self.parse(input, allocator);
                     if (r.rst) |ok| {
@@ -242,7 +150,7 @@ pub fn Parser(comptime O: type) type {
                         if (r_sfx.rst) |_| {
                             return R { .mov = r.mov + r_sfx.mov, .rst = ok };
                         } else |err| {
-                            r.drop();
+                            r.discard();
                             return R { .mov = r.mov + r_sfx.mov, .rst = err };
                         }
                     } else |err| {
@@ -251,126 +159,122 @@ pub fn Parser(comptime O: type) type {
                 }
             }.f };
         }
-
         // ========================================================
+        pub fn zeroMore(comptime self: Self) Parser(List(O)) {
+            return Parser(List(O)) { .parse = struct { const R = Result(List(O));
+                fn f(input: []const u8, allocator: std.mem.Allocator) R {
+                    var list = List(O).init(allocator);
+                    var mov: usize = 0;
+                    var r: Result(O) = self.parse(input, allocator);
+                    while (r.rst) |ok| : (r = self.parse(input[mov..], allocator)) {
+                        list.append(ok) catch {
+                            r.discard();
+                            list.deinit();
+                            return R { .mov = mov, .rst = Err.FailedToParse };
+                        };
+                        mov += r.mov;
+                    } else |_| {}
+                    return R { .mov = mov, .rst = list };
+                }
+            }.f };
+        }
 
         pub fn oneMore(comptime self: Self) Parser(List(O)) {
-            return self.times(0);
+            return Parser(List(O)) { .parse = struct { const R = Result(List(O));
+                fn f(input: []const u8, allocator: std.mem.Allocator) R {
+                    var list = List(O).init(allocator);
+                    var mov: usize = 0;
+                    var r: Result(O) = self.parse(input, allocator);
+                    while (r.rst) |ok| : (r = self.parse(input[mov..], allocator)) {
+                        list.append(ok) catch {
+                            r.discard();
+                            list.deinit();
+                            return R { .mov = mov, .rst = Err.FailedToParse };
+                        };
+                        mov += r.mov;
+                    } else |_| {}
+
+                    if (list.getItems().len == 0) {
+                        list.deinit();
+                        return R { .mov = mov, .rst = Err.FailedToParse };
+                    }
+                    return R { .mov = mov, .rst = list };
+                }
+            }.f };
         }
 
         pub fn times(comptime self: Self, comptime N: usize) Parser(List(O)) {
-            return Parser(List(O)) { .parse = struct {
-                const R = Result(List(O));
+            if (comptime N == 0) unreachable;
+            return Parser(List(O)) { .parse = struct { const R = Result(List(O));
                 fn f(input: []const u8, allocator: std.mem.Allocator) R {
-                    if (N == 0) {
-                        // OneMore
-                        var list = List(O).init(allocator);
-
-                        var ok_counter: usize = 0;
-                        var offset: usize = 0;
-                        var r: Result(O) = self.parse(input, allocator);
-                        while (r.rst) |ok| : (r = self.parse(input[offset..], allocator)) {
-                            if (comptime O != void) list.append(ok) catch {
-                                r.drop();
+                    var list = List(O).init(allocator);
+                    var mov: usize = 0;
+                    var r: Result(O) = undefined;
+                    for (0..N) |_| {
+                        r = self.parse(input[mov..], allocator);
+                        if (r.rst) |ok| {
+                            list.append(ok) catch {
+                                r.discard();
                                 list.deinit();
-                                return R { .mov = offset, .rst = Err.FailedToParse };
+                                return R { .mov = mov, .rst = Err.FailedToParse };
                             };
-                            ok_counter += 1;
-                            offset += r.mov;
-                        } else |_| {}
-
-                        if (ok_counter == 0) {
+                            mov += r.mov;
+                        } else |err| {
                             list.deinit();
-                            return R { .mov = offset, .rst = Err.FailedToParse };
+                            return R { .mov = mov, .rst = err };
                         }
-                        return R { .mov = offset, .rst = list };
-                    } else {
-                        // N Times
-                        var list = List(O).init(allocator);
-
-                        var offset: usize = 0;
-                        var r: Result(O) = undefined;
-                        for (0..N) |_| {
-                            r = self.parse(input[offset..], allocator);
-                            if (r.rst) |ok| {
-                                if (comptime O != void) list.append(ok) catch {
-                                    r.drop();
-                                    list.deinit();
-                                    return R { .mov = offset, .rst = Err.FailedToParse };
-                                };
-                                offset += r.mov;
-                            } else |err| {
-                                list.deinit();
-                                return R { .mov = offset, .rst = err };
-                            }
-                        }
-                        return R { .mov = offset, .rst = list };
                     }
+                    return R { .mov = mov, .rst = list };
                 }
             }.f };
         }
 
-        pub fn pred(comptime self: Self, comptime COND: bool) Parser(void) {
-            return Parser(void) { .parse = struct {
-                const R = Result(void);
+        pub fn pred(comptime self: Self, comptime COND: bool) Void {
+            return Void { .parse = struct { const R = Result(void);
                 fn f(input: []const u8, allocator: std.mem.Allocator) R {
                     var r = self.parse(input, allocator);
-                    r.drop();
+                    r.discard();
                     if (r.rst) |_| {
-                        if (COND) {
-                            return R { .rst = {} };
-                        } else {
-                            return R { .rst = Err.FailedToPred };
-                        }
+                        return R { .rst = if (comptime COND) { } else Err.FailedToPred };
                     } else |err| {
-                        if (COND) {
-                            return R { .rst = err };
-                        } else {
-                            return R { .rst = {} };
-                        }
+                        return R { .rst = if (comptime COND) err else { } };
                     }
                 }
             }.f };
         }
 
-        pub fn optional(comptime self: Self) Parser(void) {
-            return Parser(void) { .parse = struct {
-                const R = Result(void);
+        pub fn optional(comptime self: Self) Void {
+            return Void { .parse = struct { const R = Result(void);
                 fn f(input: []const u8, allocator: std.mem.Allocator) R {
                     var r = self.parse(input, allocator);
-                    defer r.drop();
-                    if (r.rst) |_| {
-                        return R { .mov = r.mov, .rst = {} };
-                    } else |_| {
-                        return R { .rst = {} };
-                    }
+                    r.discard();
+                    return R { .mov = if (r.isOk()) r.mov else 0, .rst = {} };
                 }
             }.f };
         }
     };
 }
 
-pub const nop = Parser(void) { .parse = struct {
-    const R = Result(void);
-    fn f(_: []const u8, _: std.mem.Allocator) R {
-        return R { .rst = {} };
-    }
-}.f };
-
 test "ascii tU8s and slice" {
-    const p1 = comptime terminal.tU8s("null");
+    const p1 = comptime U8.seq("null");
     var r1 = p1.parse("null", std.testing.allocator);
-    defer r1.drop();
+    defer r1.discard();
     try expectEqual(true, r1.isOk());
     try expectEqual(4, r1.mov);
 
-    const p2 = comptime terminal.tU8s("null").slice();
+    const p2 = comptime U8.seq("null").slice();
     var r2 = p2.parse("null", std.testing.allocator);
-    defer r2.drop();
+    defer r2.discard();
     try expectEqual(true, r2.isOk());
     try expectEqual(4, r2.mov);
     try expectEqual("null", try r2.rst);
 }
+
+pub const nop = Void { .parse = struct { const R = Result(void);
+    fn f(_: []const u8, _: std.mem.Allocator) R {
+        return R { .rst = {} };
+    }
+}.f };
 
 pub fn ref(comptime T: type, comptime func: fn() Parser(T)) Parser(T) {
     return Parser(T) { .parse = struct {
@@ -389,11 +293,10 @@ pub fn Sequence(comptime T: type) type {
         }
     };
 }
-// TODO SequenceVoid
+
 fn SequenceN(comptime O: type, comptime N: usize) type {
     return struct {
         _parsers: [N]Parser(O),
-
         const Self = @This();
 
         pub fn with(comptime self: Self, comptime p: Parser(O)) SequenceN(O, N + 1) {
@@ -403,28 +306,26 @@ fn SequenceN(comptime O: type, comptime N: usize) type {
         }
 
         pub fn build(comptime self: Self) Parser(List(O)) {
-            return Parser(List(O)) { .parse = struct {
-                const R = Result(List(O));
+            return Parser(List(O)) { .parse = struct { const R = Result(List(O));
                 fn f(input: []const u8, allocator: std.mem.Allocator) R {        
                     var list = List(O).init(allocator);
-                
-                    var offset: usize = 0;
+                    var mov: usize = 0;
                     var r: Result(O) = undefined;
                     for (self._parsers) |parser| {
-                        r = parser.parse(input[offset..], allocator);
+                        r = parser.parse(input[mov..], allocator);
                         if (r.rst) |ok| {
-                            if (comptime O != void) list.append(ok) catch {
-                                r.drop();
+                            list.append(ok) catch {
+                                r.discard();
                                 list.deinit();
-                                return R { .mov = offset, .rst = Err.FailedToParse };
+                                return R { .mov = mov, .rst = Err.FailedToParse };
                             };
-                            offset += r.mov;
+                            mov += r.mov;
                         } else |err| {
                             list.deinit();
-                            return R { .mov = offset, .rst = err };
+                            return R { .mov = mov, .rst = err };
                         }
                     }
-                    return R { .mov = offset, .rst = list };
+                    return R { .mov = mov, .rst = list };
                 }
             }.f };
         }
@@ -453,8 +354,7 @@ fn ChoiceN(comptime O: type, comptime N: usize) type {
         }
 
         pub fn build(comptime self: Self) Parser(O) {
-            return Parser(O) { .parse = struct {
-                const R = Result(O);
+            return Parser(O) { .parse = struct { const R = Result(O);
                 fn f(input: []const u8, allocator: std.mem.Allocator) R {
                     for (self._parsers) |p| {
                         const r = p.parse(input, allocator);
@@ -468,4 +368,84 @@ fn ChoiceN(comptime O: type, comptime N: usize) type {
         }
     };
 }
+
+pub const U8 = struct {
+    pub const any = Parser(void) { .parse = struct { const R = Result(void);
+        fn f(input: []const u8, _: std.mem.Allocator) R {
+            if (input.len > 0) {
+                return R { .mov = 1, .rst = {} };
+            } else {
+                return R { .rst = Err.EOF };
+            }
+        }
+    }.f };
+
+    pub fn one(comptime ch: u8) Void {
+        return Void { .parse = struct { const R = Result(void);
+            fn f(input: []const u8, _: std.mem.Allocator) R {
+                if (input.len == 0) {
+                    return R { .rst = Err.EOF };
+                }
+                if (input[0] == ch) {
+                    return R { .mov = 1, .rst = {} };
+                } else {
+                    return R { .rst = Err.ExpectForLiteral };
+                }
+            }
+        }.f};
+    }
+
+    pub fn choice(comptime set: []const u8) Void {
+        return Void { .parse = struct { const R = Result(void);
+            fn f(input: []const u8, _: std.mem.Allocator) R {
+                if (input.len == 0) {
+                    return R { .rst = Err.EOF };
+                }
+                for (set) |ch| {
+                    if (input[0] == ch) return R { .mov = 1, .rst = {} };
+                }
+                return R { .rst = Err.ExpectForLiteral };
+            }
+        }.f};
+    }
+
+    pub fn seq(comptime str: []const u8) Parser(void) {
+        return Parser(void) { .parse = struct { const R = Result(void);
+            fn f(input: []const u8, _: std.mem.Allocator) R {
+                if (input.len == 0) {
+                    return R { .rst = Err.EOF };
+                }
+
+                if (std.mem.startsWith(u8, input, str)) {
+                    return R { .mov = str.len, .rst = {} };
+                } else {
+                    return R { .rst = Err.ExpectForLiteral };
+                }
+            }
+        }.f };
+    }
+
+    /// `2 <= sys and sys <= 16`
+    pub fn asciiDigit(comptime sys: u8) Void {
+        if (comptime !(2 <= sys and sys <= 16)) unreachable;
+        return Parser(void) { .parse = struct { const R = Result(void);
+            fn f(input: []const u8, _: std.mem.Allocator) R {
+                if (input.len == 0) return R { .rst = Err.EOF };
+                const v: u8 = switch (sys) {
+                    2...10 => if ('0' <= input[0] and input[0] <= (comptime '0' + sys - 1)) input[0] else 0,
+                    else => switch (input[0]) {
+                        '0'...'9', 'a'...('a' + sys - 11), 'A'...('A' + sys - 11) => input[0],
+                        else => 0,
+                    }
+                };
+
+                if (v > 0) {
+                    return R { .mov = 1, .rst = {} };
+                } else {
+                    return R { .rst = Err.ExpectForLiteral };
+                }
+            }
+        }.f };
+    }
+};
 
