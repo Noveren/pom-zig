@@ -11,16 +11,16 @@ fn expectEqual(expect: anytype, actual: anytype) !void {
 }
 
 // ================================================================
-const whitespace: pom.Void = pom.U8.choice("\x20\x09\x0A\x0D")
+const whitespaceOpt: pom.Void = pom.U8.choice("\x20\x09\x0A\x0D")
     .oneMore()
     .optional()
 ;
 
-test "whitespace" {
+test "whitespaceOpt" {
     inline for (.{
         " ", "\n", "\r", "\t", "\x20\x09\x0A\x0D"
     }) |i| {
-        const r = whitespace.parse(i, std.testing.allocator);
+        const r = whitespaceOpt.parse(i, std.testing.allocator);
         try std.testing.expect(r.isOk());
     }
 }
@@ -95,13 +95,13 @@ const Json = union(enum) {
         }
     }
 
-    pub fn format(self: Json, allocator: std.mem.Allocator) std.ArrayList(u8) {
-        _ = self;
-        _ = allocator;
-    } 
+    // pub fn format(self: Json, allocator: std.mem.Allocator) std.ArrayList(u8) {
+    //     _ = self;
+    //     _ = allocator;
+    // } 
 };
 
-/// literal <- (tnull | ttrue | tfalse) whitespace
+/// literal <- (tnull | ttrue | tfalse) whitespaceOpt
 const literal: pom.Parser(Json) = pom.Choice(Json)
     .with(tnull.map(Json, struct { fn f(_: void, _: std.mem.Allocator) ?Json {
         return Json { .Null = {} };
@@ -188,10 +188,14 @@ fn valueRef() pom.Parser(Json) {
     return value;
 }
 
-/// array <- ('[' whitespace) value (whitespace ']')
-const array: pom.Parser(Json) = pom.ref(Json, valueRef)
-    .prefix(pom.U8.one('[').suffix(whitespace))
-    .suffix(pom.U8.one(']').prefix(whitespace))
+/// arrayValue <- whitespace? value whitespace?
+const arrayValue: pom.Parser(Json) = pom.ref(Json, valueRef)
+    .prefix(whitespaceOpt)
+    .suffix(whitespaceOpt)
+;
+
+/// arrayOne <- arrayValue
+const arrayOne: pom.Parser(Json) = arrayValue
     .map(Json, struct { fn f(j: Json, allocator: std.mem.Allocator) ?Json {
         var arr = std.ArrayList(Json).init(allocator);
         arr.append(j) catch {
@@ -202,10 +206,69 @@ const array: pom.Parser(Json) = pom.ref(Json, valueRef)
     }}.f)
 ;
 
+/// arrayMany <- (arrayOne ',')+ arrayOne
+const arrayMany: pom.Parser(Json) = pom.Sequence(Json)
+    .with(arrayValue
+        .suffix(pom.U8.one(','))
+        .oneMore()
+        .map(Json, struct { fn f(l: pom.List(Json), allocator: std.mem.Allocator) ?Json {
+            var arr = std.ArrayList(Json).init(allocator);
+            for (l.getItems()) |i| {
+                arr.append(i) catch {
+                    arr.deinit();
+                    l.deinit();
+                    return null;
+                };
+            }
+            l._list.deinit();
+            return Json { .Array = arr };
+        }}.f))
+    .with(arrayValue)
+    .build()
+    .map(Json, struct { fn f(l: pom.List(Json), _: std.mem.Allocator) ?Json {
+        const items = l.getItems();
+        std.debug.assert(l.getItems().len == 2);
+        var arr = items[0];
+        const sfx = items[1];
+        arr.Array.append(sfx) catch {
+            l.deinit();
+            return null;
+        };
+        l._list.deinit();
+        return arr;
+    }}.f)
+;
+
+
+
+/// array <- '[' arrayOne ']'
+const array: pom.Parser(Json) = pom.Choice(Json)
+    .with(arrayMany)
+    .with(arrayOne)
+    .build()
+    .prefix(pom.U8.one('['))
+    .suffix(pom.U8.one(']'))
+;
+
 test "array" {
     var r1 = array.parse("[ [\n\"string string\"\t]   ]", std.testing.allocator);
     defer r1.discard();
     try expectEqual(true, r1.isOk());
     // const v1 = try r1.rst;
     // std.debug.print("{s}\n", .{v1.Array.items[0].Array.items[0].String.items});
+
+    var r2 = array.parse("[  null, true, false, 123e-3, \"string\"  ]", std.testing.allocator);
+    // var r2 = array.parse(
+    //     \\[ null, true, false, 123e-3, \"string\",
+    //     \\ [null, true, false, 123e-3, \"string\"] 
+    //     \\]
+    // , std.testing.allocator);
+    // var r2 = array.parse(
+    //     \\[ null, true, false, 123e-3, \"string\"
+    //     \\]
+    // , std.testing.allocator);
+    defer r2.discard();
+    try expectEqual(true, r2.isOk());
+    // const v2 = try r2.rst;
+    // std.debug.print("{any}\n", .{v2.Array.items[0]});
 }
