@@ -101,6 +101,18 @@ const Json = union(enum) {
     // } 
 };
 
+fn testJsonParser(p: pom.Parser(Json), input: []const u8) !void {
+    var r = p.parse(input, std.testing.allocator);
+    defer r.discard();
+    if (r.rst) |ok| {
+        _ = ok;
+        try expectEqual(input.len, r.mov);
+    } else |err| {
+        std.debug.print("{any} {s}\n", .{err, input[0..r.mov]});
+        try std.testing.expect(false);
+    }
+}
+
 /// literal <- (tnull | ttrue | tfalse) whitespaceOpt
 const literal: pom.Parser(Json) = pom.Choice(Json)
     .with(tnull.map(Json, struct { fn f(_: void, _: std.mem.Allocator) ?Json {
@@ -206,7 +218,7 @@ const arrayOne: pom.Parser(Json) = arrayValue
     }}.f)
 ;
 
-/// arrayMany <- (arrayOne ',')+ arrayOne
+/// arrayMany <- (arrayValue ',')+ arrayValue
 const arrayMany: pom.Parser(Json) = pom.Sequence(Json)
     .with(arrayValue
         .suffix(pom.U8.one(','))
@@ -251,24 +263,10 @@ const array: pom.Parser(Json) = pom.Choice(Json)
 ;
 
 test "array" {
-    var r1 = array.parse("[ [\n\"string string\"\t]   ]", std.testing.allocator);
-    defer r1.discard();
-    try expectEqual(true, r1.isOk());
-    // const v1 = try r1.rst;
-    // std.debug.print("{s}\n", .{v1.Array.items[0].Array.items[0].String.items});
-
-    var r2 = array.parse("[  null, true, false, 123e-3, \"string\"  ]", std.testing.allocator);
-    // var r2 = array.parse(
-    //     \\[ null, true, false, 123e-3, \"string\",
-    //     \\ [null, true, false, 123e-3, \"string\"] 
-    //     \\]
-    // , std.testing.allocator);
-    // var r2 = array.parse(
-    //     \\[ null, true, false, 123e-3, \"string\"
-    //     \\]
-    // , std.testing.allocator);
-    defer r2.discard();
-    try expectEqual(true, r2.isOk());
-    // const v2 = try r2.rst;
-    // std.debug.print("{any}\n", .{v2.Array.items[0]});
+    try testJsonParser(array, "[ [\n\"string string\"\t]   ]");
+    try testJsonParser(array, "[  null, true, false, 123e-3, \"string\"  ]");
+    try testJsonParser(array,
+        \\[  null, true, false, 123e-3, "string",
+        \\ [ null, true, false, 123e-3, "string" ] ]
+    );
 }
