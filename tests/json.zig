@@ -95,17 +95,53 @@ const Json = union(enum) {
         }
     }
 
-    // pub fn format(self: Json, allocator: std.mem.Allocator) std.ArrayList(u8) {
-    //     _ = self;
-    //     _ = allocator;
-    // } 
+    pub fn encode(self: Json, allocator: std.mem.Allocator) !std.ArrayList(u8) {
+        var str = std.ArrayList(u8).init(allocator);
+        switch (self) {
+            .Null => |_| {
+                try str.appendSlice("null");
+                return str;
+            },
+            .Boolean => |v| {
+                try str.appendSlice(if (v) "true" else "false");
+                return str;
+            },
+            .Number => |v| {
+                const num = try std.fmt.allocPrint(std.testing.allocator, "{any}", .{v});
+                defer std.testing.allocator.free(num);
+                try str.appendSlice(num);
+                return str;
+            },
+            .String => |v| {
+                try str.appendSlice("\"");
+                try str.appendSlice(v.items);
+                try str.appendSlice("\"");
+                return str;
+            },
+            .Array => |arr| {
+                try str.appendSlice("[");
+                for (arr.items, 0..) |i, idx| {
+                    const r = try i.encode(allocator);
+                    defer r.deinit();
+                    try str.appendSlice(r.items);
+                    if (idx != arr.items.len-1) {
+                        try str.appendSlice(", ");
+                    }
+                }
+                try str.appendSlice("]");
+                return str;
+            }
+        }
+    }
 };
 
 fn testJsonParser(p: pom.Parser(Json), input: []const u8) !void {
     var r = p.parse(input, std.testing.allocator);
     defer r.discard();
     if (r.rst) |ok| {
-        _ = ok;
+        const s = try ok.encode(std.testing.allocator);
+        defer s.deinit();
+        std.debug.print("{s}\n", .{s.items});
         try expectEqual(input.len, r.mov);
     } else |err| {
         std.debug.print("{any} {s}\n", .{err, input[0..r.mov]});
@@ -250,8 +286,6 @@ const arrayMany: pom.Parser(Json) = pom.Sequence(Json)
         return arr;
     }}.f)
 ;
-
-
 
 /// array <- '[' arrayOne ']'
 const array: pom.Parser(Json) = pom.Choice(Json)
