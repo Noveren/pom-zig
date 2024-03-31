@@ -86,12 +86,23 @@ const Json = union(enum) {
     Number: f64,
     String: std.ArrayList(u8),
     Array: std.ArrayList(Json),
+    Object: std.StringHashMap(Json),
 
-    pub fn deinit(self: Json) void {
-        switch (self) {
+    pub fn deinit(self: *Json) void {
+        switch (self.*) {
             .String => |s| s.deinit(),
-            .Array  => |a| { for (a.items) |i| i.deinit(); a.deinit(); },
-            else    => {},
+            .Array  => |a| { for (a.items) |*i| i.deinit(); a.deinit(); },
+            .Object => |*o| {
+                var kIter = o.keyIterator();
+                while (kIter.next()) |key| {
+                    const k: []const u8 = key.*;
+                    var v: Json = o.get(k).?;
+                    v.deinit();
+                    o.allocator.free(k);
+                }
+                o.deinit();
+            },
+            else => {},
         }
     }
 
@@ -129,6 +140,23 @@ const Json = union(enum) {
                     }
                 }
                 try str.appendSlice("]");
+                return str;
+            },
+            .Object => |obj| {
+                try str.appendSlice("{");
+                var kIter = obj.keyIterator();
+                while (kIter.next()) |key| {
+                    const k = key.*;
+                    const r = try obj.get(k).?.encode(allocator);
+                    defer r.deinit();
+                    try str.appendSlice("\"");
+                    try str.appendSlice(k);
+                    try str.appendSlice("\" : ");
+                    try str.appendSlice(r.items);
+                    // TODO
+                    try str.appendSlice(", ");
+                }
+                try str.appendSlice("}");
                 return str;
             }
         }
@@ -287,7 +315,7 @@ const arrayMany: pom.Parser(Json) = pom.Sequence(Json)
     }}.f)
 ;
 
-/// array <- '[' arrayOne ']'
+/// array <- '[' (arrayMany / arrayOne) ']'
 const array: pom.Parser(Json) = pom.Choice(Json)
     .with(arrayMany)
     .with(arrayOne)
@@ -304,3 +332,27 @@ test "array" {
         \\ [ null, true, false, 123e-3, "string" ] ]
     );
 }
+
+/// kv <- string whitespace? ':' whitespace? value
+const kv: pom.Parser(pom.List(Json)) = pom.Sequence(Json)
+    .with(string.suffix(whitespaceOpt).suffix(pom.U8.one(':')))
+    .with(pom.ref(Json, valueRef).prefix(whitespaceOpt))
+    .build()
+;
+test "key value" {
+    var r = kv.parse("\"key\" : [9376, null, true]", std.testing.allocator);
+    defer r.discard();
+    try std.testing.expect(r.isOk());
+    const v = try r.rst;
+    try expectEqual(2, v.getItems().len);
+    const s1 = try v.getItems()[0].encode(std.testing.allocator);
+    defer s1.deinit();
+    const s2 = try v.getItems()[1].encode(std.testing.allocator);
+    defer s2.deinit();
+    std.debug.print("{s}: {s}\n", .{s1.items, s2.items});
+}
+
+// objectValue <- whitespace? kv whitespace?
+// objectOne <- objectValue
+// objectMany <- (objectValue ',')+ objectValue
+// object <- '{' (objectMany / objectOne) '}'

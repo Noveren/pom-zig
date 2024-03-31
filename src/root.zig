@@ -21,7 +21,7 @@ pub fn List(comptime T: type) type {
         pub fn deinit(l: List(T)) void {
             defer l._list.deinit();
             if (comptime std.meta.hasMethod(T, "deinit")) {
-                for (l._list.items) |i| {
+                for (l._list.items) |*i| {
                     i.deinit();
                 }
             }
@@ -61,7 +61,7 @@ pub fn Result(comptime Ok: type) type {
                 else => {},
                 .Struct, .Union, .Enum => {
                     if (comptime std.meta.hasMethod(Ok, "deinit")) {
-                        if (self.rst) |ok| { ok.deinit(); } else |_| {}
+                        if (self.rst) |*ok| { ok.deinit(); } else |_| {}
                     }
                 }
             }
