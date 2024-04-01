@@ -142,22 +142,24 @@ const Json = union(enum) {
                 try str.appendSlice("]");
                 return str;
             },
-            .Object => |_| {
-                // try str.appendSlice("{");
-                // var kIter = obj.keyIterator();
-                // while (kIter.next()) |key| {
-                //     const k = key.*;
-                //     const r = try obj.get(k).?.encode(allocator);
-                //     defer r.deinit();
-                //     try str.appendSlice("\"");
-                //     try str.appendSlice(k);
-                //     try str.appendSlice("\" : ");
-                //     try str.appendSlice(r.items);
-                //     // TODO
-                //     try str.appendSlice(", ");
-                // }
-                // try str.appendSlice("}");
-                try str.appendSlice("object");
+            .Object => |obj| {
+                try str.appendSlice("{");
+                var kIter = obj.keyIterator();
+                if (kIter.len > 0) {
+                    while (kIter.next()) |key| {
+                        const k = key.*;
+                        const r = try obj.get(k).?.encode(allocator);
+                        defer r.deinit();
+                        try str.appendSlice("\"");
+                        try str.appendSlice(k);
+                        try str.appendSlice("\" : ");
+                        try str.appendSlice(r.items);
+                        try str.appendSlice(", ");
+                    }
+                    _ = str.pop();
+                    _ = str.pop();
+                }
+                try str.appendSlice("}");
                 return str;
             }
         }
@@ -372,14 +374,20 @@ const objectValue: pom.Parser(pom.List(Json)) = kv
 /// objectOne <- objectValue
 const objectOne: pom.Parser(Json) = objectValue
     .map(Json, struct { fn f(l: pom.List(Json), allocator: std.mem.Allocator) ?Json {
-        const obj = std.StringHashMap(Json).init(allocator);
-        l.deinit();
-        // obj.putNoClobber(l.getItems()[0].String.items, l.getItems()[1]) catch {
-        //     l.deinit();
-        //     obj.deinit();
-        //     return null;
-        // };
-        // l._list.deinit();
+        var obj = std.StringHashMap(Json).init(allocator);
+        const key: []u8 = allocator.dupe(u8, l.getItems()[0].String.items) catch {
+            l.deinit();
+            obj.deinit();
+            return null;
+        };
+        obj.putNoClobber(key, l.getItems()[1]) catch {
+            allocator.free(key);
+            l.deinit();
+            obj.deinit();
+            return null;
+        };
+        l.getItems()[0].String.deinit();
+        l._list.deinit();
         return Json { .Object = obj };
     }
     }.f)
