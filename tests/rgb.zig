@@ -29,17 +29,17 @@ fn toRGB(l: pom.List(u8), _: std.mem.Allocator) ?RGB {
 const digit = pom.U8.asciiDigit(16);
 
 const color2: pom.Parser(u8) =
-    digit.times(2).slice().map(u8, hex2u8)
+    digit.times(2, null).slice().map(u8, hex2u8)
 ;
 const rgb6: pom.Parser(RGB) =
-    color2.times(3).map(RGB, toRGB)
+    color2.times(3, null).map(RGB, toRGB)
 ;
 
 const color1: pom.Parser(u8) =
     digit.slice().map(u8, hex2u8)
 ;
 const rgb3: pom.Parser(RGB) =
-    color1.times(3).map(RGB, toRGB)
+    color1.times(3, null).map(RGB, toRGB)
 ;
 
 const rgb: pom.Parser(RGB) = pom.Choice(RGB)
