@@ -294,28 +294,28 @@ const arrayMany: pom.Parser(Json) = pom.Sequence(Json)
         .oneMore()
         .map(Json, struct { fn f(l: pom.List(Json), allocator: std.mem.Allocator) ?Json {
             var arr = std.ArrayList(Json).init(allocator);
-            for (l.getItems()) |i| {
+            for (l.items()) |i| {
                 arr.append(i) catch {
                     arr.deinit();
                     l.deinit();
                     return null;
                 };
             }
-            l._list.deinit();
+            l.memory.deinit();
             return Json { .Array = arr };
         }}.f))
     .with(arrayValue)
     .build()
     .map(Json, struct { fn f(l: pom.List(Json), _: std.mem.Allocator) ?Json {
-        const items = l.getItems();
-        std.debug.assert(l.getItems().len == 2);
+        const items = l.items();
+        std.debug.assert(l.items().len == 2);
         var arr = items[0];
         const sfx = items[1];
         arr.Array.append(sfx) catch {
             l.deinit();
             return null;
         };
-        l._list.deinit();
+        l.memory.deinit();
         return arr;
     }}.f)
 ;
@@ -359,10 +359,10 @@ test "key value" {
 
     try std.testing.expect(r.isOk());
     const v = try r.rst;
-    try expectEqual(2, v.getItems().len);
-    const s1 = try v.getItems()[0].encode(std.testing.allocator);
+    try expectEqual(2, v.items().len);
+    const s1 = try v.items()[0].encode(std.testing.allocator);
     defer s1.deinit();
-    const s2 = try v.getItems()[1].encode(std.testing.allocator);
+    const s2 = try v.items()[1].encode(std.testing.allocator);
     defer s2.deinit();
     std.debug.print("{s}: {s}\n", .{s1.items, s2.items});
 }
@@ -377,19 +377,19 @@ const objectValue: pom.Parser(pom.List(Json)) = kv
 const objectOne: pom.Parser(Json) = objectValue
     .map(Json, struct { fn f(l: pom.List(Json), allocator: std.mem.Allocator) ?Json {
         var obj = std.StringHashMap(Json).init(allocator);
-        const key: []u8 = allocator.dupe(u8, l.getItems()[0].String.items) catch {
+        const key: []u8 = allocator.dupe(u8, l.items()[0].String.items) catch {
             l.deinit();
             obj.deinit();
             return null;
         };
-        obj.putNoClobber(key, l.getItems()[1]) catch {
+        obj.putNoClobber(key, l.items()[1]) catch {
             allocator.free(key);
             l.deinit();
             obj.deinit();
             return null;
         };
-        l.getItems()[0].String.deinit();
-        l._list.deinit();
+        l.items()[0].String.deinit();
+        l.memory.deinit();
         return Json { .Object = obj };
     }}.f)
 ;
@@ -398,35 +398,59 @@ test "objectOne" {
     try testJsonParser(objectOne, "\"key\" : [9376, null, true]");
 }
 
+const objectManySep: pom.Parser(Json) = objectValue.oneMoreSep(pom.U8.one(','))
+    .map(Json, struct { fn f(l: pom.List(pom.List(Json)), allocator: std.mem.Allocator) ?Json {
+        defer l.memory.deinit();
+        var obj = std.StringHashMap(Json).init(allocator);
+        const kvs = l.items();
+        for (kvs) |*lkv| {
+            const key: []u8 = allocator.dupe(u8, lkv.items()[0].String.items) catch {
+                l.deinit();
+                obj.deinit();
+                return null;
+            };
+            obj.putNoClobber(key, lkv.items()[1]) catch {
+                allocator.free(key);
+                l.deinit();
+                obj.deinit();
+                return null;
+            };
+            lkv.items()[0].String.deinit();
+            lkv.memory.deinit();
+        }
+        return Json { .Object = obj };
+    }}.f)
+;
+
 /// objectMany <- (objectValue ',')+ objectValue
 const objectMany: pom.Parser(Json) = pom.Sequence(Json)
     .with(objectValue.suffix(pom.U8.one(',')).oneMore()
         .map(Json, struct { fn f(l: pom.List(pom.List(Json)), allocator: std.mem.Allocator) ?Json {
-            defer l._list.deinit();
+            defer l.memory.deinit();
             var obj = std.StringHashMap(Json).init(allocator);
-            const kvs = l.getItems();
+            const kvs = l.items();
             for (kvs) |*lkv| {
-                const key: []u8 = allocator.dupe(u8, lkv.getItems()[0].String.items) catch {
+                const key: []u8 = allocator.dupe(u8, lkv.items()[0].String.items) catch {
                     l.deinit();
                     obj.deinit();
                     return null;
                 };
-                obj.putNoClobber(key, lkv.getItems()[1]) catch {
+                obj.putNoClobber(key, lkv.items()[1]) catch {
                     allocator.free(key);
                     l.deinit();
                     obj.deinit();
                     return null;
                 };
-                lkv.getItems()[0].String.deinit();
-                lkv._list.deinit();
+                lkv.items()[0].String.deinit();
+                lkv.memory.deinit();
             }
             return Json { .Object = obj };
         }}.f))
     .with(objectOne)
     .build()
     .map(Json, struct { fn f(l: pom.List(Json), _: std.mem.Allocator) ?Json {
-        const items = l.getItems();
-        std.debug.assert(l.getItems().len == 2);
+        const items = l.items();
+        std.debug.assert(l.items().len == 2);
         var obj = items[0];
         var sfx = items[1];
 
@@ -438,7 +462,7 @@ const objectMany: pom.Parser(Json) = pom.Sequence(Json)
             return null;
         };
         sfx.Object.deinit();
-        l._list.deinit();
+        l.memory.deinit();
         return obj;
     }}.f)
 ;
@@ -455,7 +479,7 @@ const objectZero: pom.Parser(Json) = whitespaceOpt
 
 /// object <- '{' (objectMany / objectOne) '}'
 const object: pom.Parser(Json) = pom.Choice(Json)
-    .with(objectMany)
+    .with(objectManySep)
     .with(objectOne)
     .with(objectZero)
     .build()

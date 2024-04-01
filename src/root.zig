@@ -12,27 +12,27 @@ fn expectEqual(expect: anytype, actual: anytype) !void {
 pub fn List(comptime T: type) type {
     return struct {
         // std.ArrayList 能够自动处理 void, 添加 void 不申请内存
-        _list: std.ArrayList(T),
+        memory: std.ArrayList(T),
 
         pub fn init(allocator: std.mem.Allocator) List(T) {
-            return List(T) { ._list = std.ArrayList(T).init(allocator) };
+            return List(T) { .memory = std.ArrayList(T).init(allocator) };
         }
 
         pub fn deinit(l: List(T)) void {
-            defer l._list.deinit();
+            defer l.memory.deinit();
             if (comptime std.meta.hasMethod(T, "deinit")) {
-                for (l._list.items) |*i| {
+                for (l.memory.items) |*i| {
                     i.deinit();
                 }
             }
         }
 
         pub fn append(l: *List(T), item: T) std.mem.Allocator.Error!void {
-            try l._list.append(item);
+            try l.memory.append(item);
         }
 
-        pub fn getItems(l: List(T)) []const T {
-            return l._list.items;
+        pub fn items(l: List(T)) []const T {
+            return l.memory.items;
         }
     };
 }
@@ -55,6 +55,7 @@ pub fn Result(comptime Ok: type) type {
             return if (self.rst) |_| true else |_| false;
         }
 
+        // 需要的：用于在组合器失败时，将解析器解析成功的结果进行释放
         pub fn discard(self: *@This()) void {
             const info_Ok: std.builtin.Type = @typeInfo(Ok);
             switch (info_Ok) {
@@ -179,6 +180,38 @@ pub fn Parser(comptime O: type) type {
             }.f };
         }
 
+        pub fn oneMoreSep(comptime self: Self, comptime sep: ?Void) Parser(List(O)) {
+            return Parser(List(O)) { .parse = struct { const R = Result(List(O));
+                fn f(input: []const u8, allocator: std.mem.Allocator) R {
+                    var list = List(O).init(allocator);
+                    var mov: usize = 0;
+
+                    var err_is_after_sep = false;
+                    var r: Result(O) = self.parse(input, allocator);
+                    const err_is_the_first = !r.isOk();
+                    while (r.rst) |ok| : (r = self.parse(input[mov..], allocator)) {
+                        mov += r.mov;
+                        list.append(ok) catch {
+                            r.discard();
+                            list.deinit();
+                            return R { .mov = mov, .rst = Err.OutOfMemory };
+                        };
+                        if (comptime sep) |p_sep| {
+                            const r_sep = p_sep.parse(input[mov..], allocator);
+                            mov += r_sep.mov;
+                            if (r_sep.rst) |_| { err_is_after_sep = true; } else |_| break;
+                        }
+                    } else |err| {
+                        if (err_is_the_first or err_is_after_sep) {
+                            list.deinit();
+                            return R { .mov = mov, .rst = err };
+                        }
+                    }
+                    return R { .mov = mov, .rst = list };
+                }
+            }.f };
+        }
+
         pub fn oneMore(comptime self: Self) Parser(List(O)) {
             return Parser(List(O)) { .parse = struct { const R = Result(List(O));
                 fn f(input: []const u8, allocator: std.mem.Allocator) R {
@@ -194,7 +227,7 @@ pub fn Parser(comptime O: type) type {
                         mov += r.mov;
                     } else |_| {}
 
-                    if (list.getItems().len == 0) {
+                    if (list.items().len == 0) {
                         list.deinit();
                         return R { .mov = mov, .rst = Err.FailedToParse };
                     }
@@ -268,6 +301,14 @@ test "ascii tU8s and slice" {
     try expectEqual(true, r2.isOk());
     try expectEqual(4, r2.mov);
     try expectEqual("null", try r2.rst);
+}
+
+test "oneMoreSep" {
+    const p = comptime U8.one('1').oneMoreSep(U8.one(','));
+
+    try std.testing.expect(p.parse("1", std.testing.allocator).isOk());
+    try std.testing.expect(p.parse("1,1,1,1,1,1", std.testing.allocator).isOk());
+    try std.testing.expect(!p.parse("1,1,1,1,2", std.testing.allocator).isOk());
 }
 
 pub const nop = Void { .parse = struct { const R = Result(void);
