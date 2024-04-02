@@ -167,7 +167,7 @@ const tstring: pom.Void =
 ;
 
 // =================================================================
-fn _literal(comptime Opt: enum { Null, True, False }) fn(void, std.mem.Allocator) ?Json  {
+fn genLiteral(comptime Opt: enum { Null, True, False }) fn(void, std.mem.Allocator) ?Json  {
     return struct {
         fn f(_: void, _: std.mem.Allocator) ?Json {
             return switch (comptime Opt) {
@@ -181,9 +181,9 @@ fn _literal(comptime Opt: enum { Null, True, False }) fn(void, std.mem.Allocator
 
 /// literal <- tnull / ttrue / tfalse
 const literal: pom.Parser(Json) = pom.Choice(Json)
-    .with(tnull.map(Json, _literal(.Null)))
-    .with(ttrue.map(Json, _literal(.True)))
-    .with(tfalse.map(Json, _literal(.False)))
+    .with(tnull.map(Json, genLiteral(.Null)))
+    .with(ttrue.map(Json, genLiteral(.True)))
+    .with(tfalse.map(Json, genLiteral(.False)))
     .build()
 ;
 

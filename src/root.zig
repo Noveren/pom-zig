@@ -58,6 +58,7 @@ pub const Err = error {
 
 pub fn Result(comptime Ok: type) type {
     return struct {
+        // Result 需要包含更丰富的信息
         mov: usize = 0,
         rst: Err!Ok,
 
@@ -123,6 +124,8 @@ pub fn Parser(comptime T: type) type {
                 }
             }.f };
         }
+
+        // pub fn mapErr()
 
         pub fn prefix(comptime self: Self, comptime pfx: Void) Parser(T) {
             return Parser(T) { .parse = struct { const R = Result(T);

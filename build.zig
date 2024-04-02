@@ -11,22 +11,23 @@ pub fn build(b: *std.Build) void {
     });
 
     // ============================================================
-    const mjson = b.addStaticLibrary(.{
-        .name = "mjson",
-        .root_source_file = .{ .path = "mjson/root.zig" },
+    const leptjson = b.addStaticLibrary(.{
+        .name = "leptjson",
+        .root_source_file = .{ .path = "leptjson/root.zig" },
         .optimize = optimize,
         .target = target,
     });
-    mjson.root_module.addImport("pom", pom);
-    const mjson_install = b.addInstallArtifact(mjson, .{});
-    const mjson_install_step = b.step("mjson", "Build and install mjson");
-    mjson_install_step.dependOn(&mjson_install.step);
+    leptjson.root_module.addImport("pom", pom);
+    const leptjson_install = b.addInstallArtifact(leptjson, .{});
+    const leptjson_install_step = b.step("leptjson", "Build and install leptjson");
+    leptjson_install_step.dependOn(&leptjson_install.step);
 
-    const mjson_test = b.addTest(.{
-        .root_source_file = .{ .path = "mjson/root.zig" },
+    const leptjson_test = b.addTest(.{
+        .root_source_file = .{ .path = "leptjson/root.zig" },
         .target = target,
         .optimize = optimize,
     });
-    const mjson_test_step = b.step("mjson_test", "Run mjson test");
-    mjson_test_step.dependOn(&mjson_test.step);
+    const leptjson_test_run = b.addRunArtifact(leptjson_test);
+    const leptjson_test_step = b.step("leptjson_test", "Run leptjson test");
+    leptjson_test_step.dependOn(&leptjson_test_run.step);
 }
