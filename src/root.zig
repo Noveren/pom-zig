@@ -162,6 +162,10 @@ pub fn Parser(comptime T: type) type {
                     var mov: usize = 0;
                     var hasSepBefore: bool = false;
                     var r: Result(T) = self.parse(input, allocator);
+                    
+                    if (comptime mode < 2) {
+                        if (r.isOk() and r.mov == 0) { @panic("TODO Infty Loop\n"); }
+                    }
 
                     while (r.rst) |ok| : (r = self.parse(input[mov..], allocator)) {
                         mov += r.mov;
