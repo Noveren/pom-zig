@@ -2,83 +2,6 @@
 const std = @import("std");
 const pom = @import("pom");
 
-fn expectEqual(expect: anytype, actual: anytype) !void {
-    if (@TypeOf(actual) == []const u8 or @TypeOf(actual) == []u8) {
-        return std.testing.expectEqualStrings(expect, actual);
-    } else {
-        return std.testing.expectEqual(expect, actual);
-    }
-}
-
-// ================================================================
-const whitespaceOpt: pom.Void = pom.U8.choice("\x20\x09\x0A\x0D")
-    .oneMore(null)
-    .optional()
-;
-
-test "whitespaceOpt" {
-    inline for (.{
-        " ", "\n", "\r", "\t", "\x20\x09\x0A\x0D"
-    }) |i| {
-        const r = whitespaceOpt.parse(i, std.testing.allocator);
-        try std.testing.expect(r.isOk());
-    }
-}
-
-const dec: pom.Void = pom.U8.asciiDigit(10);
-
-/// integer <- '-'? (('0' !dec) / (!'0' dec+))
-const integer: pom.Void = pom.Choice(void)
-    .with(pom.U8.one('0').suffix(dec.pred(false)))
-    .with(dec.oneMore(null).discard().prefix(pom.U8.one('0').pred(false)))
-    .build()
-    .prefix(pom.U8.one('-').optional())
-;
-
-/// fraction <- '.' dec+
-const fraction: pom.Void =
-    dec.oneMore(null).discard().prefix(pom.U8.one('.'))
-;
-
-/// exponent <- ('e' / 'E') ('+' / '-')? dec+
-const exponent: pom.Void = pom.Sequence(void)
-    .with(pom.Choice(void)
-        .with(pom.U8.one('e'))
-        .with(pom.U8.one('E'))
-        .build())
-    .with(pom.Choice(void)
-        .with(pom.U8.one('+'))
-        .with(pom.U8.one('-'))
-        .build()
-        .optional())
-    .with(dec.oneMore(null).discard())
-    .build()
-    .discard()
-;
-
-const colon:     pom.Void = pom.U8.one(':');
-const comma:     pom.Void = pom.U8.one(',');
-const lbracket:  pom.Void = pom.U8.one('[');
-const rbracket:  pom.Void = pom.U8.one(']');
-const lcurly:    pom.Void = pom.U8.one('{');
-const rcurly:    pom.Void = pom.U8.one('}');
-const tnull:     pom.Void = pom.U8.seq("null");
-const ttrue:     pom.Void = pom.U8.seq("true");
-const tfalse:    pom.Void = pom.U8.seq("false");
-/// TODO 支持转义、utf-8
-const tstring:   pom.Void = pom.U8.any.prefix(pom.U8.one('\"').pred(false))
-    .oneMore(null).discard()
-    .prefix(pom.U8.one('\"'))
-    .suffix(pom.U8.one('\"'))
-;
-const tnumber:   pom.Void = pom.Sequence(void)
-    .with(integer)
-    .with(fraction.optional())
-    .with(exponent.optional())
-    .build()
-    .discard()
-;
-
 // ================================================================
 const Json = union(enum) {
     Null,
@@ -86,18 +9,17 @@ const Json = union(enum) {
     Number: f64,
     String: std.ArrayList(u8),
     Array: std.ArrayList(Json),
-    // TODO StringHashMap 是无序的
-    Object: std.StringHashMap(Json),
+    Object: std.StringArrayHashMap(Json),
 
     pub fn deinit(self: *Json) void {
         switch (self.*) {
             .String => |s| s.deinit(),
             .Array  => |a| { for (a.items) |*i| i.deinit(); a.deinit(); },
             .Object => |*o| {
-                var kIter = o.keyIterator();
-                while (kIter.next()) |key| {
-                    const k: []const u8 = key.*;
-                    var v: Json = o.get(k).?;
+                var iter = o.iterator();
+                while (iter.next()) |entry| {
+                    const k = entry.key_ptr.*;
+                    var   v = entry.value_ptr.*;
                     v.deinit();
                     o.allocator.free(k);
                 }
@@ -145,17 +67,19 @@ const Json = union(enum) {
             },
             .Object => |*obj| {
                 try str.appendSlice("{");
-                var kIter = obj.keyIterator();
-                // std.debug.print("kIter.len is {d}, obj.count() is {d}\n", .{kIter.len, obj.count()});
                 if (obj.count() > 0) {
-                    while (kIter.next()) |key| {
-                        const k = key.*;
-                        const r = try obj.get(k).?.encode(allocator);
-                        defer r.deinit();
+                    var iter = obj.iterator();
+                    while (iter.next()) |entry| {
+                        const k = entry.key_ptr.*;
+                        const v = entry.value_ptr.*;
+
+                        const v_str = try v.encode(allocator);
+                        defer v_str.deinit();
+
                         try str.appendSlice("\"");
                         try str.appendSlice(k);
                         try str.appendSlice("\" : ");
-                        try str.appendSlice(r.items);
+                        try str.appendSlice(v_str.items);
                         try str.appendSlice(", ");
                     }
                     _ = str.pop();
@@ -166,8 +90,14 @@ const Json = union(enum) {
             }
         }
     }
+
+    pub fn decode(input: []const u8, allocator: std.mem.Allocator) !Json {
+        const r = json.parse(input, allocator);
+        return if (r.rst) |ok| ok else |err| err;
+    }
 };
 
+// ================================================================
 fn testJsonParser(p: pom.Parser(Json), input: []const u8) !void {
     var r = p.parse(input, std.testing.allocator);
     defer r.discard();
@@ -182,32 +112,88 @@ fn testJsonParser(p: pom.Parser(Json), input: []const u8) !void {
     }
 }
 
-/// literal <- (tnull | ttrue | tfalse) whitespaceOpt
+fn expectEqual(expect: anytype, actual: anytype) !void {
+    if (@TypeOf(actual) == []const u8 or @TypeOf(actual) == []u8) {
+        return std.testing.expectEqualStrings(expect, actual);
+    } else {
+        return std.testing.expectEqual(expect, actual);
+    }
+}
+
+// ================================================================
+const ws:        pom.Void = pom.U8.choice("\x20\x09\x0A\x0D");
+const tnull:     pom.Void = pom.U8.seq("null");
+const ttrue:     pom.Void = pom.U8.seq("true");
+const tfalse:    pom.Void = pom.U8.seq("false");
+const tdec:      pom.Void = pom.U8.asciiDigit(10);
+
+/// integer <- '-'? (('0' !tdec) / (!'0' tdec+))
+const integer: pom.Void = pom.Choice(void)
+    .with(pom.U8.one('0').suffix(tdec.pred(false)))
+    .with(tdec.oneMore(null).discard().prefix(pom.U8.one('0').pred(false)))
+    .build()
+    .prefix(pom.U8.one('-').optional())
+;
+
+/// fraction <- '.' tdec+
+const fraction: pom.Void =
+    tdec.oneMore(null).discard().prefix(pom.U8.one('.'))
+;
+
+/// exponent <- ('e' / 'E') ('+' / '-')? tdec+
+const exponent: pom.Void = pom.Sequence(void)
+    .with(pom.U8.choice("eE"))
+    .with(pom.U8.choice("+-").optional())
+    .with(tdec.oneMore(null).discard())
+    .build()
+    .discard()
+;
+
+/// tnumber <- initeger fraction? exponent?
+const tnumber: pom.Void = pom.Sequence(void)
+    .with(integer)
+    .with(fraction.optional())
+    .with(exponent.optional())
+    .build()
+    .discard()
+;
+
+/// tstring = '"' (!'"' [any])* '"'
+const tstring: pom.Void =
+    pom.U8.any.prefix(pom.U8.one('\"').pred(false))
+    .zeroMore(null).discard()
+    .prefix(pom.U8.one('\"'))
+    .suffix(pom.U8.one('\"'))
+;
+
+// =================================================================
+fn _literal(comptime Opt: enum { Null, True, False }) fn(void, std.mem.Allocator) ?Json  {
+    return struct {
+        fn f(_: void, _: std.mem.Allocator) ?Json {
+            return switch (comptime Opt) {
+                .Null  => Json { .Null = {} },
+                .True  => Json { .Boolean = true },
+                .False => Json { .Boolean = false },
+            };
+        }
+    }.f;
+}
+
+/// literal <- tnull / ttrue / tfalse
 const literal: pom.Parser(Json) = pom.Choice(Json)
-    .with(tnull.map(Json, struct { fn f(_: void, _: std.mem.Allocator) ?Json {
-        return Json { .Null = {} };
-    }}.f))
-    .with(ttrue.map(Json, struct { fn f(_: void, _: std.mem.Allocator) ?Json {
-        return Json { .Boolean = true };
-    }}.f))
-    .with(tfalse.map(Json, struct { fn f(_: void, _: std.mem.Allocator) ?Json {
-        return Json { .Boolean = false };
-    }}.f))
+    .with(tnull.map(Json, _literal(.Null)))
+    .with(ttrue.map(Json, _literal(.True)))
+    .with(tfalse.map(Json, _literal(.False)))
     .build()
 ;
 
 test "literal" {
-    const r1 = literal.parse("null", std.testing.allocator);
-    try expectEqual(Json { .Null = {} }, try r1.rst);
-
-    const r2 = literal.parse("true", std.testing.allocator);
-    try expectEqual(Json { .Boolean = true }, try r2.rst);
-
-    const r3 = literal.parse("false", std.testing.allocator);
-    try expectEqual(Json { .Boolean = false }, try r3.rst);
+    try testJsonParser(literal, "null");
+    try testJsonParser(literal, "true");
+    try testJsonParser(literal, "false");
 }
 
-/// number <- integer fraction? exponent?
+/// number <- tnumber
 const number: pom.Parser(Json) = tnumber
     .slice()
     .map(Json, struct { fn f(s: []const u8, _: std.mem.Allocator) ?Json {
@@ -216,27 +202,12 @@ const number: pom.Parser(Json) = tnumber
 ;
 
 test "number" {
-    inline for (comptime .{
-        .{"123.23e2", 12323.0},
-    }) |i| {
-        var r = number.parse(i[0], std.testing.allocator);
-        try expectEqual(true, r.isOk());
-        try expectEqual(i[0].len, r.mov);
-        const v = try r.rst;
-        try expectEqual(i[1], v.Number);
-    }
-
-    inline for (comptime .{
-        "0123.23e2",
-    }) |i| {
-        var r = number.parse(i, std.testing.allocator);
-        try expectEqual(false, r.isOk());
-        try expectEqual(0, r.mov);
-    }
+    try testJsonParser(number, "123.23e2");
+    try testJsonParser(number, "0.23e2");
 }
 
-const string: pom.Parser(Json) = tstring
-    .slice()
+const string: pom.Parser(Json) =
+    tstring.slice()
     .map(Json, struct { fn f(s: []const u8, allocator: std.mem.Allocator) ?Json {
         var str = std.ArrayList(u8).init(allocator);
         str.appendSlice(s[1..(s.len - 1)]) catch {
@@ -247,16 +218,10 @@ const string: pom.Parser(Json) = tstring
 ;
 
 test "string" {
-    var r1 = string.parse("\"string\"", std.testing.allocator);
-    defer r1.discard();
-    if (r1.rst) |ok| {
-        try expectEqual("string", ok.String.items);
-    } else |err| {
-        std.debug.print("{any} {d}\n", .{err, r1.mov});
-        try expectEqual(false, true);
-    }
+    try testJsonParser(string, "\"Json string\"");
 }
 
+/// value <- literal / number / string / array / object
 const value: pom.Parser(Json) = pom.Choice(Json)
     .with(literal)
     .with(number)
@@ -270,9 +235,16 @@ fn valueRef() pom.Parser(Json) {
     return value;
 }
 
-const array: pom.Parser(Json) = pom.ref(Json, valueRef).zeroMore(pom.U8.one(',').prefix(whitespaceOpt).suffix(whitespaceOpt))
-    .prefix(pom.U8.one('[').suffix(whitespaceOpt))
-    .suffix(pom.U8.one(']').prefix(whitespaceOpt))
+/// wsZeroMore <- ws*
+const wsZeroMore: pom.Void = ws.zeroMore(null).discard();
+
+// TODO 如何使用 PEG 描述 `a, b, c` 中最后一个元素后没有 sep
+/// array <- '[' ws* (value (ws* ',' ws*))* ws* ']'
+const array: pom.Parser(Json) =
+    pom.ref(Json, valueRef)
+    .zeroMore(pom.U8.one(',').prefix(wsZeroMore).suffix(wsZeroMore))
+        .prefix(pom.U8.one('[').suffix(wsZeroMore))
+        .suffix(pom.U8.one(']').prefix(wsZeroMore))
     .map(Json, struct { fn f(l: pom.List(Json), allocator: std.mem.Allocator) ?Json {
         var arr = std.ArrayList(Json).init(allocator);
         for (l.items()) |i| {
@@ -282,65 +254,51 @@ const array: pom.Parser(Json) = pom.ref(Json, valueRef).zeroMore(pom.U8.one(',')
                 return null;
             };
         }
-        l.memory.deinit();
+        l.rawDeinit();
         return Json { .Array = arr };
     }}.f)
 ;
 
 test "array" {
-    try testJsonParser(array, "[ [\n\"string string\"\t]   ]");
-    try testJsonParser(array, "[  null, true, false, 123e-3, \"string\"  ]");
+    try testJsonParser(array, "[]");
+    try testJsonParser(array, "[ ]");
     try testJsonParser(array,
         \\[  null, true, false, 123e-3, "string",
         \\ [ null, true, false, 123e-3, "string" ] ]
     );
-    try testJsonParser(array, "[ ]");
 }
 
-// TODO key 直接为 input 的切片
-/// kv <- string whitespace? ':' whitespace? value
+/// kv <- string ws* ':' ws* value
 const kv: pom.Parser(pom.List(Json)) = pom.Sequence(Json)
-    .with(string.suffix(whitespaceOpt).suffix(pom.U8.one(':')))
-    .with(pom.ref(Json, valueRef).prefix(whitespaceOpt))
+    .with(string.suffix(wsZeroMore).suffix(pom.U8.one(':')))
+    .with(pom.ref(Json, valueRef).prefix(wsZeroMore))
     .build()
 ;
 
-test "key value" {
-    var r = kv.parse("\"key\" : [9376, null, true]", std.testing.allocator);
-    defer r.discard();
-
-    try std.testing.expect(r.isOk());
-    const v = try r.rst;
-    try expectEqual(2, v.items().len);
-    const s1 = try v.items()[0].encode(std.testing.allocator);
-    defer s1.deinit();
-    const s2 = try v.items()[1].encode(std.testing.allocator);
-    defer s2.deinit();
-    std.debug.print("{s}: {s}\n", .{s1.items, s2.items});
-}
-
-const object: pom.Parser(Json) = kv.zeroMore(pom.U8.one(',').prefix(whitespaceOpt).suffix(whitespaceOpt))
-    .prefix(pom.U8.one('{').suffix(whitespaceOpt))
-    .suffix(pom.U8.one('}').prefix(whitespaceOpt))
+/// object <- '{' ws* (kv (ws* ',' ws*))* ws* '}'
+const object: pom.Parser(Json) =
+    kv.zeroMore(pom.U8.one(',').prefix(wsZeroMore).suffix(wsZeroMore))
+        .prefix(pom.U8.one('{').suffix(wsZeroMore))
+        .suffix(pom.U8.one('}').prefix(wsZeroMore))
     .map(Json, struct { fn f(l: pom.List(pom.List(Json)), allocator: std.mem.Allocator) ?Json {
-        defer l.memory.deinit();
-        var obj = std.StringHashMap(Json).init(allocator);
+        var obj = std.StringArrayHashMap(Json).init(allocator);
         const kvs = l.items();
-        for (kvs) |*lkv| {
-            const key: []u8 = allocator.dupe(u8, lkv.items()[0].String.items) catch {
+        for (kvs) |*_kv| {
+            const key: []u8 = allocator.dupe(u8, _kv.items()[0].String.items) catch {
                 l.deinit();
                 obj.deinit();
                 return null;
             };
-            obj.putNoClobber(key, lkv.items()[1]) catch {
+            obj.putNoClobber(key, _kv.items()[1]) catch {
                 allocator.free(key);
                 l.deinit();
                 obj.deinit();
                 return null;
             };
-            lkv.items()[0].String.deinit();
-            lkv.memory.deinit();
+            _kv.items()[0].String.deinit();
+            _kv.rawDeinit();
         }
+        l.rawDeinit();
         return Json { .Object = obj };
     }}.f)
 ;
@@ -350,26 +308,23 @@ test "object" {
     try testJsonParser(object, "{   }");
     try testJsonParser(object, 
         \\{
-        \\    "1": true, "2": false, "3": [true, false, null]
-        \\}
-    );
-    try testJsonParser(object, 
-        \\{
-        \\    "1": true, "2": false, "3": [true, false, null],
-        \\    "obj": {"1": true, "2": false, "3": [true, false, null]}
+        \\    "1": true, "2": false, "3": [true, false, null], "4": { "1": "Nested" }
         \\}
     );
 }
 
-const json: pom.Parser(Json) = object
-    .prefix(whitespaceOpt)
-    .suffix(whitespaceOpt)
+/// json <- ws* object ws*
+const json: pom.Parser(Json) =
+    object.prefix(wsZeroMore).suffix(wsZeroMore)
 ;
 
 test "json" {
     try testJsonParser(json, "    {}  ");
     try testJsonParser(json, "   { }   ");
-    try testJsonParser(json,
+    try testJsonParser(json, json_input);
+}
+
+const json_input: []const u8 =
 \\         
 \\{
 \\    "array": [
@@ -386,39 +341,22 @@ test "json" {
 \\        "object": { "1": null, "2": 1234 }
 \\    }
 \\}         
-    );
-}
+;
 
+
+// =================================================================
 pub fn main() !void {
     var gpa = std.heap.GeneralPurposeAllocator(.{}){};
     defer if (gpa.deinit() == .leak) @panic("Memory Leak");
     const allocator = gpa.allocator();
 
-    const input: []const u8 =
-        \\         
-        \\{
-        \\    "array": [
-        \\        true, false, null, "string", 123e-9, [true, false, null, "string"], {
-        \\                "array": [true, false, null, "string", 123e-9, [true, false, null, 123e-9, "string"]]
-        \\            }
-        \\    ],
-        \\    "object": {
-        \\        "array": [
-        \\            true, false, null, "string", 123e-9, [true, false, null, 123e-9, "string"], {
-        \\                    "array": [true, false, null, "string", [true, false, null, 123e-9, "string"]]
-        \\                }
-        \\        ],
-        \\        "object": { "1": null, "2": 1234 }
-        \\    }
-        \\} 
-    ;
-    var r = json.parse(input, allocator);
-    defer r.discard();
-    if (r.rst) |ok| {
+    var res = Json.decode(json_input, allocator);
+    if (res) |*ok| {
+        defer ok.deinit();
         const s = try ok.encode(allocator);
         defer s.deinit();
         std.debug.print("{s}\n", .{s.items});
     } else |err| {
-        std.debug.print("{any} {s}\n", .{err, input[0..r.mov]});
+        std.debug.print("{any}\n", .{err});
     }
 }
