@@ -119,8 +119,8 @@ const Json = union(enum) {
                 return str;
             },
             .Number => |v| {
-                const num = try std.fmt.allocPrint(std.testing.allocator, "{any}", .{v});
-                defer std.testing.allocator.free(num);
+                const num = try std.fmt.allocPrint(allocator, "{any}", .{v});
+                defer allocator.free(num);
                 try str.appendSlice(num);
                 return str;
             },
@@ -387,4 +387,38 @@ test "json" {
 \\    }
 \\}         
     );
+}
+
+pub fn main() !void {
+    var gpa = std.heap.GeneralPurposeAllocator(.{}){};
+    defer if (gpa.deinit() == .leak) @panic("Memory Leak");
+    const allocator = gpa.allocator();
+
+    const input: []const u8 =
+        \\         
+        \\{
+        \\    "array": [
+        \\        true, false, null, "string", 123e-9, [true, false, null, "string"], {
+        \\                "array": [true, false, null, "string", 123e-9, [true, false, null, 123e-9, "string"]]
+        \\            }
+        \\    ],
+        \\    "object": {
+        \\        "array": [
+        \\            true, false, null, "string", 123e-9, [true, false, null, 123e-9, "string"], {
+        \\                    "array": [true, false, null, "string", [true, false, null, 123e-9, "string"]]
+        \\                }
+        \\        ],
+        \\        "object": { "1": null, "2": 1234 }
+        \\    }
+        \\} 
+    ;
+    var r = json.parse(input, allocator);
+    defer r.discard();
+    if (r.rst) |ok| {
+        const s = try ok.encode(allocator);
+        defer s.deinit();
+        std.debug.print("{s}\n", .{s.items});
+    } else |err| {
+        std.debug.print("{any} {s}\n", .{err, input[0..r.mov]});
+    }
 }

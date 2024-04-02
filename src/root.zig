@@ -11,7 +11,6 @@ fn expectEqual(expect: anytype, actual: anytype) !void {
 
 pub fn List(comptime T: type) type {
     return struct {
-        // std.ArrayList 能够自动处理 void, 添加 void 不申请内存
         memory: std.ArrayList(T),
         const Self = @This();
 
@@ -19,20 +18,26 @@ pub fn List(comptime T: type) type {
             return Self { .memory = std.ArrayList(T).init(allocator) };
         }
 
+        /// `deinit` the items in the list and the list
         pub fn deinit(self: Self) void {
-            defer self.memory.deinit();
             if (comptime std.meta.hasMethod(T, "deinit")) {
                 for (self.memory.items) |*i| {
                     i.deinit();
                 }
             }
+            self.memory.deinit();
         }
 
-        pub fn append(self: *Self, item: T) std.mem.Allocator.Error!void {
+        /// just `deinit` the list, maybe lead to memory leak
+        pub inline fn rawDeinit(self: Self) void {
+            self.memory.deinit();
+        }
+
+        pub inline fn append(self: *Self, item: T) std.mem.Allocator.Error!void {
             try self.memory.append(item);
         }
 
-        pub fn items(self: Self) []const T {
+        pub inline fn items(self: Self) []const T {
             return self.memory.items;
         }
 
@@ -60,7 +65,6 @@ pub fn Result(comptime Ok: type) type {
             return if (self.rst) |_| true else |_| false;
         }
 
-        // 需要的：用于在组合器失败时，将解析器解析成功的结果进行释放
         pub fn discard(self: *@This()) void {
             const info_Ok: std.builtin.Type = @typeInfo(Ok);
             switch (info_Ok) {
@@ -162,18 +166,18 @@ pub fn Parser(comptime T: type) type {
                     var mov: usize = 0;
                     var hasSepBefore: bool = false;
                     var r: Result(T) = self.parse(input, allocator);
-                    
+
                     if (comptime mode < 2) {
                         if (r.isOk() and r.mov == 0) { @panic("TODO Infty Loop\n"); }
                     }
 
                     while (r.rst) |ok| : (r = self.parse(input[mov..], allocator)) {
-                        mov += r.mov;
                         list.append(ok) catch {
                             r.discard();
                             list.deinit();
                             return R { .mov = mov, .rst = Err.OutOfMemory };
                         };
+                        mov += r.mov;
                         // TODO 是否要限制最大次数
                         if (comptime mode > 1) { if (list.len() == N) break; }
                         
@@ -191,6 +195,7 @@ pub fn Parser(comptime T: type) type {
                             else => list.len() != N,
                         };
                         if (failed) {
+                            mov += r.mov;
                             list.deinit();
                             return R { .mov = mov, .rst = err };
                         }
@@ -303,7 +308,7 @@ pub fn Sequence(comptime T: type) type {
         }
     };
 }
-// TODO 逻辑好像有问题
+
 fn SequenceN(comptime T: type, comptime N: usize) type {
     return struct {
         _parsers: [N]Parser(T),
@@ -327,10 +332,11 @@ fn SequenceN(comptime T: type, comptime N: usize) type {
                             list.append(ok) catch {
                                 r.discard();
                                 list.deinit();
-                                return R { .mov = mov, .rst = Err.FailedToParse };
+                                return R { .mov = mov, .rst = Err.OutOfMemory };
                             };
                             mov += r.mov;
                         } else |err| {
+                            mov += r.mov;
                             list.deinit();
                             return R { .mov = mov, .rst = err };
                         }
@@ -366,8 +372,8 @@ fn ChoiceN(comptime T: type, comptime N: usize) type {
         pub fn build(comptime self: Self) Parser(T) {
             return Parser(T) { .parse = struct { const R = Result(T);
                 fn f(input: []const u8, allocator: std.mem.Allocator) R {
-                    for (self._parsers) |p| {
-                        const r = p.parse(input, allocator);
+                    for (self._parsers) |parser| {
+                        const r = parser.parse(input, allocator);
                         if (r.isOk()) {
                             return r;
                         }
@@ -380,7 +386,7 @@ fn ChoiceN(comptime T: type, comptime N: usize) type {
 }
 
 pub const U8 = struct {
-    pub const any = Parser(void) { .parse = struct { const R = Result(void);
+    pub const any = Void { .parse = struct { const R = Result(void);
         fn f(input: []const u8, _: std.mem.Allocator) R {
             if (input.len > 0) {
                 return R { .mov = 1, .rst = {} };
