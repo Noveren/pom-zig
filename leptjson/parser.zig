@@ -14,8 +14,8 @@ const Error = leptjson.Error;
 // }
 
 // ================================================================
-const ws: pom.Void = pom.U8.set("\x20\x09\x0A\x0D");
-const wsZeroMore: pom.Void = ws.zeroMore(null).discard();
+const ws: pom.VoidE = pom.U8.set("\x20\x09\x0A\x0D");
+const wsZeroMore: pom.VoidE = ws.zeroMore(null).discard();
 
 test "whitespace" {
     const rst1 = wsZeroMore.parse("     ", std.testing.allocator);
@@ -23,9 +23,9 @@ test "whitespace" {
 }
 
 // ================================================================
-const value: pom.Parser(Value, pom.Error||Error) = pom.Choice(Value, Error)
-    .with(literal)
-    .build()
+const value: pom.Parser(Value, Error) = pom.Choice(Value, Error)
+    .withPrefix(literal, pom.U8.set("ntf"))
+    .build(Error.ExpectValue)
 ;
 
 // ================================================================
@@ -47,7 +47,7 @@ const literal: pom.Parser(Value, Error) = pom.Choice(Value, pom.Error)
     .with(pom.U8.seq("true").map(Value, genLiteral(.True)))
     .with(pom.U8.seq("false").map(Value, genLiteral(.False)))
     .build()
-    .castErr(Error.InvalidValue)
+    .castErr(Error.InvalidValue) // pom.Error.FailedToChoice -> Error.InvalidValue
 ;
 
 test "literal" {
@@ -59,7 +59,10 @@ test "literal" {
     try std.testing.expect(rst2.offset == 0);
 
     const rst3 = value.parse("nul", std.testing.allocator);
-    try std.testing.expectError(Error.Expec, rst3.value);
+    try std.testing.expectError(Error.InvalidValue, rst3.value);
+
+    const rst4 = value.parse("", std.testing.allocator);
+    try std.testing.expectError(Error.ExpectValue, rst4.value);
 }
 
 // ================================================================

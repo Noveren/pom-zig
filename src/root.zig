@@ -80,7 +80,12 @@ pub const Error = error {
 } || std.mem.Allocator.Error;
 
 pub fn ParserE(comptime T: type) type { return Parser(T, Error); }
-pub const Void = Parser(void, Error);
+
+pub fn Void(comptime E: type) type {
+    comptime if (!isErrorSet(E)) @compileError("Expected error set type, found " ++ @typeName(E));
+    return Parser(void, E);
+}
+pub const VoidE = Void(Error);
 
 pub fn Parser(comptime T: type, comptime E: type) type {
     comptime if (!isErrorSet(E)) @compileError("Expected error set type, found " ++ @typeName(E));
@@ -91,8 +96,8 @@ pub fn Parser(comptime T: type, comptime E: type) type {
         // pub fn Val(comptime _: Self) type { return T; }
         // pub fn Err(comptime _: Self) type { return E; }
 
-        pub fn discard(comptime self: Self) Void {
-            return Void { .parse = struct { const R = Result(void, E);
+        pub fn discard(comptime self: Self) Void(E) {
+            return Void(E) { .parse = struct { const R = Result(void, E);
                 fn f(input: []const u8, allocator: std.mem.Allocator) R {
                     var rst = self.parse(input, allocator);
                     return R {
@@ -145,7 +150,7 @@ pub fn Parser(comptime T: type, comptime E: type) type {
         // ========================================================
         /// mode: 0 - zeroMore, 1 - oneMore, 2 - times(N)
         /// TODO T == void => many -> Parser(void, E)
-        fn many(comptime self: Self, comptime sep: ?Void, comptime mode: u8, comptime N: usize) Parser(List(T), Error||E) {
+        fn many(comptime self: Self, comptime sep: ?Void(Error), comptime mode: u8, comptime N: usize) Parser(List(T), Error||E) {
             return Parser(List(T), Error||E) { .parse = struct { const R = Result(List(T), Error||E);
                 fn f(input: []const u8, allocator: std.mem.Allocator) R {
                     var list = List(T).init(allocator);
@@ -191,7 +196,7 @@ pub fn Parser(comptime T: type, comptime E: type) type {
             }.f };
         }
 
-        pub fn zeroMore(comptime self: Self, comptime sep: ?Void) Parser(List(T), Error||E) {
+        pub fn zeroMore(comptime self: Self, comptime sep: ?Void(Error)) Parser(List(T), Error||E) {
             return Parser(List(T), Error||E) { .parse = struct { const R = Result(List(T), Error||E);
                 fn f(input: []const u8, allocator: std.mem.Allocator) R {
                     return self.many(sep, 0, 0).parse(input, allocator);
@@ -199,7 +204,7 @@ pub fn Parser(comptime T: type, comptime E: type) type {
             }.f };
         }
 
-        pub fn oneMore(comptime self: Self, comptime sep: ?Void) Parser(List(T), Error||E) {
+        pub fn oneMore(comptime self: Self, comptime sep: ?Void(Error)) Parser(List(T), Error||E) {
             return Parser(List(T), Error||E) { .parse = struct { const R = Result(List(T), Error||E);
                 fn f(input: []const u8, allocator: std.mem.Allocator) R {
                     return self.many(sep, 1, 0).parse(input, allocator);
@@ -207,7 +212,7 @@ pub fn Parser(comptime T: type, comptime E: type) type {
             }.f };
         }
 
-        pub fn times(comptime self: Self, comptime N: usize, comptime sep: ?Void) Parser(List(T), E) {
+        pub fn times(comptime self: Self, comptime N: usize, comptime sep: ?Void(Error)) Parser(List(T), E) {
             if (comptime N == 0) @compileError("Times N == 0");
             return Parser(List(T), E) { .parse = struct { const R = Result(List(T), Error||E);
                 fn f(input: []const u8, allocator: std.mem.Allocator) R {
@@ -223,7 +228,14 @@ pub fn Choice(comptime T: type, comptime E: type) type {
     return struct {
         pub fn with(comptime p: Parser(T, E)) ChoiceN(T, E, 1) {
             return ChoiceN(T, E, 1) {
-                ._parsers = [1]Parser(T, E) { p }
+                ._parsers = [1]Parser(T, E) { p },
+            };
+        }
+
+        pub fn withPrefix(comptime p: Parser(T, E), comptime pfx: Void(Error)) ChoicePrefixN(T, E, 1) {
+            return ChoicePrefixN(T, E, 1) {
+                ._parsers = [1]Parser(T, E) { p },
+                ._prefixs = [1]Void(Error) { pfx }
             };
         }
     };
@@ -237,12 +249,12 @@ fn ChoiceN(comptime T: type, comptime E: type, comptime N: usize) type {
 
         pub fn with(comptime self: Self, comptime p: Parser(T, E)) ChoiceN(T, E, N + 1) {
             return ChoiceN(T, E, N + 1) {
-                ._parsers = self._parsers ++ [1]Parser(T, E) { p }
+                ._parsers = self._parsers ++ [1]Parser(T, E) { p },
             };
         }
 
-        pub fn build(comptime self: Self) Parser(T, Error||E) {
-            return Parser(T, Error||E) { .parse = struct { const R = Result(T, Error||E);
+        pub fn build(comptime self: Self) Parser(T, Error) {
+            return Parser(T, Error) { .parse = struct { const R = Result(T, Error);
                 fn f(input: []const u8, allocator: std.mem.Allocator) R {
                     for (self._parsers) |parser| {
                         const rst = parser.parse(input, allocator);
@@ -257,10 +269,43 @@ fn ChoiceN(comptime T: type, comptime E: type, comptime N: usize) type {
     };
 }
 
+fn ChoicePrefixN(comptime T: type, comptime E: type, comptime N: usize) type {
+    comptime if (!isErrorSet(E)) @compileError("Expected error set type, found " ++ @typeName(E));
+    return struct {
+        _parsers: [N]Parser(T, E),
+        _prefixs: [N]Void(Error),
+        const Self = @This();
+
+        pub fn withPrefix(comptime self: Self, comptime p: Parser(T, E), comptime pfx: Void(Error)) ChoicePrefixN(T, E, N + 1) {
+            return ChoicePrefixN(T, E, N + 1) {
+                ._parsers = self._parsers ++ [1]Parser(T, E) { p },
+                ._prefixs = self._prefixs ++ [1]?Void(Error) { pfx }
+            };
+        }
+
+        pub fn build(comptime self: Self, comptime new_err: anytype) Parser(T, E||@TypeOf(new_err)) {
+            const NewE: type = @TypeOf(new_err);
+            comptime if (!isErrorSet(NewE)) @compileError("Expected error set type, found " ++ @typeName(NewE));
+            return Parser(T, E||@TypeOf(new_err)) { .parse = struct { const R = Result(T, E||@TypeOf(new_err));
+                fn f(input: []const u8, allocator: std.mem.Allocator) R {
+                    for (self._parsers, self._prefixs) |parser, pfx| {
+                        const rst_pfx = pfx.parse(input, allocator);
+                        if (rst_pfx.isOk()) {
+                            const rst = parser.parse(input, allocator);
+                            return R { .offset = rst.offset, .value = rst.value }; // T, E
+                        }
+                    }
+                    return R { .value = new_err }; // NewE
+                }
+            }.f };
+        }
+    };
+}
+
 
 pub const U8 = struct {
-    pub fn one(comptime ch: u8) Void {
-        return Void { .parse = struct { const R = Result(void, Error);
+    pub fn one(comptime ch: u8) Void(Error) {
+        return Void(Error) { .parse = struct { const R = Result(void, Error);
             fn f(input: []const u8, _: std.mem.Allocator) R {
                 if (input.len == 0) {
                     return R { .value = Error.EOF };
@@ -274,8 +319,8 @@ pub const U8 = struct {
         }.f};
     }
 
-    pub fn set(comptime u8s: []const u8) Void {
-        return Void { .parse = struct { const R = Result(void, Error);
+    pub fn set(comptime u8s: []const u8) Void(Error) {
+        return Void(Error) { .parse = struct { const R = Result(void, Error);
             fn f(input: []const u8, _: std.mem.Allocator) R {
                 if (input.len == 0) {
                     return R { .value = Error.EOF };
@@ -288,8 +333,8 @@ pub const U8 = struct {
         }.f};
     }
 
-    pub fn seq(comptime str: []const u8) Void {
-        return Void { .parse = struct { const R = Result(void, Error);
+    pub fn seq(comptime str: []const u8) Void(Error) {
+        return Void(Error) { .parse = struct { const R = Result(void, Error);
             fn f(input: []const u8, _: std.mem.Allocator) R {
                 if (input.len == 0) {
                     return R { .value = Error.EOF };
