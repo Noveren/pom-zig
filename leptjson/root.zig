@@ -1,12 +1,12 @@
 
 const std = @import("std");
 
-// const parser = @import("parser.zig");
+const parser = @import("parser.zig");
 
-// test {
-//     std.testing.refAllDecls(parser);
-//     _ = parser;
-// }
+test {
+    std.testing.refAllDecls(parser);
+    _ = parser;
+}
 
 pub const Type = enum {
     Null, Boolean,
@@ -40,21 +40,3 @@ pub const Error = error {
     MissColon,
     MissCommaOrCurlyBracket,
 };
-
-fn Result(comptime T: type, comptime E: type) type {
-    comptime {
-        const info: std.builtin.Type = @typeInfo(E);
-        switch (info) {
-            else => @compileError("Expected error set type, found " ++ @typeName(E)),
-            .ErrorSet => {}
-        }
-    }
-    return struct {
-        rst: E!T,
-    };
-}
-
-test "Result" {
-    const r = Result(u8, Error) { .rst = Error.ExpectValue };
-    try std.testing.expectError(Error.ExpectValue, r.rst);
-}

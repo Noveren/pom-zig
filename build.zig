@@ -27,6 +27,7 @@ pub fn build(b: *std.Build) void {
         .target = target,
         .optimize = optimize,
     });
+    leptjson_test.root_module.addImport("pom", pom);
     const leptjson_test_run = b.addRunArtifact(leptjson_test);
     const leptjson_test_step = b.step("leptjson_test", "Run leptjson test");
     leptjson_test_step.dependOn(&leptjson_test_run.step);

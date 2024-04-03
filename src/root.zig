@@ -1,12 +1,10 @@
 
 const std = @import("std");
+const Allocator = std.mem.Allocator;
 
-fn expectEqual(expect: anytype, actual: anytype) !void {
-    if (@TypeOf(actual) == []const u8) {
-        return std.testing.expectEqualStrings(expect, actual);
-    } else {
-        return std.testing.expectEqual(expect, actual);
-    }
+fn isErrorSet(comptime T: type) bool {
+    const info: std.builtin.Type = @typeInfo(T);
+    return switch (info) { else => false, .ErrorSet => true };
 }
 
 pub fn List(comptime T: type) type {
@@ -47,7 +45,32 @@ pub fn List(comptime T: type) type {
     };
 }
 
-pub const Err = error {
+fn Result(comptime T: type, comptime E: type) type {
+    comptime if (!isErrorSet(E)) @compileError("Expected error set type, found " ++ @typeName(E));
+    return struct {
+        value: E!T,
+        offset: usize = 0,
+        const Self = @This();
+
+        pub inline fn isOk(self: Self) bool {
+            return if (self.value) |_| true else |_| false;
+        }
+
+        pub fn discard(self: *Self) void {
+            const info: std.builtin.Type = @typeInfo(T);
+            switch (info) {
+                else => {},
+                .Struct, .Union, .Enum => {
+                    if (comptime std.meta.hasMethod(T, "deinit")) {
+                        if (self.value) |*ok| { ok.deinit(); } else |_| {}
+                    }
+                }
+            }
+        }
+    };
+}
+
+pub const Error = error {
     EOF,
     ExpectForLiteral,
     FailedToMap,
@@ -56,138 +79,98 @@ pub const Err = error {
     FailedToParse,
 } || std.mem.Allocator.Error;
 
-pub fn Result(comptime Ok: type) type {
+pub fn ParserE(comptime T: type) type { return Parser(T, Error); }
+pub const Void = Parser(void, Error);
+
+pub fn Parser(comptime T: type, comptime E: type) type {
+    comptime if (!isErrorSet(E)) @compileError("Expected error set type, found " ++ @typeName(E));
     return struct {
-        // Result 需要包含更丰富的信息
-        mov: usize = 0,
-        rst: Err!Ok,
-
-        pub inline fn isOk(self: @This()) bool {
-            return if (self.rst) |_| true else |_| false;
-        }
-
-        pub fn discard(self: *@This()) void {
-            const info_Ok: std.builtin.Type = @typeInfo(Ok);
-            switch (info_Ok) {
-                else => {},
-                .Struct, .Union, .Enum => {
-                    if (comptime std.meta.hasMethod(Ok, "deinit")) {
-                        if (self.rst) |*ok| { ok.deinit(); } else |_| {}
-                    }
-                }
-            }
-        }
-    };
-}
-
-pub const Void = Parser(void);
-pub fn Parser(comptime T: type) type {
-    return struct {
-        parse: *const fn([]const u8, std.mem.Allocator) Result(T),
+        parse: *const fn([]const u8, std.mem.Allocator) Result(T, E),
         const Self = @This();
 
+        // pub fn Val(comptime _: Self) type { return T; }
+        // pub fn Err(comptime _: Self) type { return E; }
+
         pub fn discard(comptime self: Self) Void {
-            return Void { .parse = struct { const R = Result(void);
+            return Void { .parse = struct { const R = Result(void, E);
                 fn f(input: []const u8, allocator: std.mem.Allocator) R {
-                    var r = self.parse(input, allocator);
+                    var rst = self.parse(input, allocator);
                     return R {
-                        .mov = r.mov,
-                        .rst = if (r.rst) |_| r.discard() else |err| err,
-                     };
-                }
-            }.f };
-        }
-
-        pub fn slice(comptime self: Self) Parser([]const u8) {
-            return Parser([]const u8) { .parse = struct { const R = Result([]const u8);
-                fn f(input: []const u8, allocator: std.mem.Allocator) R {
-                    var r = self.parse(input, allocator);
-                    return R {
-                        .mov = r.mov,
-                        .rst = if (r.rst) |_| blk: {
-                            r.discard();
-                            break :blk input[0..r.mov];
-                        } else |err| err,
+                        .offset = rst.offset,
+                        .value = if (rst.value) |_| rst.discard() else |err| err,
                     };
                 }
             }.f };
         }
 
-        pub fn map(comptime self: Self, comptime M: type, comptime map_fn: fn(T, std.mem.Allocator) ?M) Parser(M) {
-            return Parser(M) { .parse = struct { const R = Result(M);
+        pub fn map(comptime self: Self, comptime M: type, comptime map_fn: fn(*T, std.mem.Allocator) ?M) Parser(M, Error||E) {
+            return Parser(M, E||Error) { .parse = struct { const R = Result(M, E||Error);
                 fn f(input: []const u8, allocator: std.mem.Allocator) R {
-                    const r = self.parse(input, allocator);
+                    var rst = self.parse(input, allocator);
                     return R {
-                        .mov = r.mov,
-                        .rst = if (r.rst) |ok| map_fn(ok, allocator) orelse Err.FailedToMap else |err| err,
+                        .offset = rst.offset,
+                        .value  = if (rst.value) |*ok| map_fn(ok, allocator) orelse Error.FailedToMap else |err| err,
                     };
                 }
             }.f };
         }
 
-        // pub fn mapErr()
-
-        pub fn prefix(comptime self: Self, comptime pfx: Void) Parser(T) {
-            return Parser(T) { .parse = struct { const R = Result(T);
+        pub fn mapErr(comptime self: Self, comptime NewE: type, comptime map_err_fn: fn(E) NewE) Parser(T, NewE) {
+            comptime if (!isErrorSet(E)) @compileError("Expected error set type, found " ++ @typeName(NewE));
+            return Parser(T, NewE) { .parse = struct { const R = Result(T, NewE);
                 fn f(input: []const u8, allocator: std.mem.Allocator) R {
-                    const r_pfx = pfx.parse(input, allocator);
-                    if (r_pfx.rst) |_| {
-                        const r = self.parse(input[r_pfx.mov..], allocator);
-                        return R { .mov = r_pfx.mov + r.mov, .rst = r.rst };
-                    } else |err| {
-                        return R { .mov = r_pfx.mov, .rst = err };
-                    }
+                    const rst = self.parse(input, allocator);
+                    return R {
+                        .offset = rst.offset,
+                        .value  = if (rst.value) |ok| ok else |err| map_err_fn(err),
+                    };
                 }
             }.f };
         }
 
-        pub fn suffix(comptime self: Self, comptime sfx: Parser(void)) Parser(T) {
-            return Parser(T) { .parse = struct { const R = Result(T);
+        pub fn castErr(comptime self: Self, comptime new_err: anytype) Parser(T, @TypeOf(new_err)) {
+            const NewE: type = @TypeOf(new_err);
+            comptime if (!isErrorSet(NewE)) @compileError("Expected error set type, found " ++ @typeName(NewE));
+            return Parser(T, NewE) { .parse = struct { const R = Result(T, NewE);
                 fn f(input: []const u8, allocator: std.mem.Allocator) R {
-                    var r = self.parse(input, allocator);
-                    if (r.rst) |ok| {
-                        const r_sfx = sfx.parse(input[r.mov..], allocator);
-                        return R {
-                            .mov = r.mov + r_sfx.mov,
-                            .rst = if (r_sfx.rst) |_| ok else |err| blk: {
-                                r.discard();
-                                break: blk err;
-                            }
-                        };
-                    } else |err| {
-                        return R { .mov = r.mov, .rst = err };
-                    }
+                    const rst = self.parse(input, allocator);
+                    return R {
+                        .offset = rst.offset,
+                        .value  = if (rst.value) |ok| ok else |_| new_err,
+                    };
                 }
             }.f };
         }
+
         // ========================================================
         /// mode: 0 - zeroMore, 1 - oneMore, 2 - times(N)
-        fn many(comptime self: Self, comptime sep: ?Void, comptime mode: u8, comptime N: usize) Parser(List(T)) {
-            return Parser(List(T)) { .parse = struct { const R = Result(List(T));
+        /// TODO T == void => many -> Parser(void, E)
+        fn many(comptime self: Self, comptime sep: ?Void, comptime mode: u8, comptime N: usize) Parser(List(T), Error||E) {
+            return Parser(List(T), Error||E) { .parse = struct { const R = Result(List(T), Error||E);
                 fn f(input: []const u8, allocator: std.mem.Allocator) R {
                     var list = List(T).init(allocator);
-                    var mov: usize = 0;
+                    var offset: usize = 0;
                     var hasSepBefore: bool = false;
-                    var r: Result(T) = self.parse(input, allocator);
+                    var rst: Result(T, E) = self.parse(input, allocator);
 
                     if (comptime mode < 2) {
-                        if (r.isOk() and r.mov == 0) { @panic("TODO Infty Loop\n"); }
+                        if (rst.isOk() and rst.offset == 0) { @panic("TODO Infty Loop\n"); }
                     }
 
-                    while (r.rst) |ok| : (r = self.parse(input[mov..], allocator)) {
+                    while (rst.value) |ok| : (rst = self.parse(input[offset..], allocator)) {
                         list.append(ok) catch {
-                            r.discard();
+                            rst.discard();
                             list.deinit();
-                            return R { .mov = mov, .rst = Err.OutOfMemory };
+                            return R { .offset = offset, .value = Error.OutOfMemory };
                         };
-                        mov += r.mov;
+                        offset += rst.offset;
                         // TODO 是否要限制最大次数
                         if (comptime mode > 1) { if (list.len() == N) break; }
                         
                         if (comptime sep) |p_sep| {
-                            const r_sep = p_sep.parse(input[mov..], allocator);
-                            if (r_sep.rst) |_| {
-                                mov += r_sep.mov;
+                            const r_sep = p_sep.parse(input[offset..], allocator);
+                            if (r_sep.value) |_| {
+                                offset += r_sep.offset;
                                 hasSepBefore = true;
                             } else |_| break;
                         }
@@ -198,273 +181,175 @@ pub fn Parser(comptime T: type) type {
                             else => list.len() != N,
                         };
                         if (failed) {
-                            mov += r.mov;
+                            offset += rst.offset;
                             list.deinit();
-                            return R { .mov = mov, .rst = err };
+                            return R { .offset = offset, .value = err };
                         }
                     }
-                    return R { .mov = mov, .rst = list };
+                    return R { .offset = offset, .value = list };
                 }
             }.f };
         }
 
-        pub fn zeroMore(comptime self: Self, comptime sep: ?Void) Parser(List(T)) {
-            return Parser(List(T)) { .parse = struct { const R = Result(List(T));
+        pub fn zeroMore(comptime self: Self, comptime sep: ?Void) Parser(List(T), Error||E) {
+            return Parser(List(T), Error||E) { .parse = struct { const R = Result(List(T), Error||E);
                 fn f(input: []const u8, allocator: std.mem.Allocator) R {
                     return self.many(sep, 0, 0).parse(input, allocator);
                 }
             }.f };
         }
 
-        pub fn oneMore(comptime self: Self, comptime sep: ?Void) Parser(List(T)) {
-            return Parser(List(T)) { .parse = struct { const R = Result(List(T));
+        pub fn oneMore(comptime self: Self, comptime sep: ?Void) Parser(List(T), Error||E) {
+            return Parser(List(T), Error||E) { .parse = struct { const R = Result(List(T), Error||E);
                 fn f(input: []const u8, allocator: std.mem.Allocator) R {
                     return self.many(sep, 1, 0).parse(input, allocator);
                 }
             }.f };
         }
 
-        pub fn times(comptime self: Self, comptime N: usize, comptime sep: ?Void) Parser(List(T)) {
+        pub fn times(comptime self: Self, comptime N: usize, comptime sep: ?Void) Parser(List(T), E) {
             if (comptime N == 0) @compileError("Times N == 0");
-            return Parser(List(T)) { .parse = struct { const R = Result(List(T));
+            return Parser(List(T), E) { .parse = struct { const R = Result(List(T), Error||E);
                 fn f(input: []const u8, allocator: std.mem.Allocator) R {
                     return self.many(sep, 2, N).parse(input, allocator);
                 }
             }.f };
-        }
-
-        pub fn pred(comptime self: Self, comptime COND: bool) Void {
-            return Void { .parse = struct { const R = Result(void);
-                fn f(input: []const u8, allocator: std.mem.Allocator) R {
-                    var r = self.parse(input, allocator);
-                    r.discard();
-                    if (r.rst) |_| {
-                        return R { .rst = if (comptime COND) { } else Err.FailedToPred };
-                    } else |err| {
-                        return R { .rst = if (comptime COND) err else { } };
-                    }
-                }
-            }.f };
-        }
-
-        pub fn optional(comptime self: Self) Void {
-            return Void { .parse = struct { const R = Result(void);
-                fn f(input: []const u8, allocator: std.mem.Allocator) R {
-                    var r = self.parse(input, allocator);
-                    r.discard();
-                    return R { .mov = if (r.isOk()) r.mov else 0, .rst = {} };
-                }
-            }.f };
-        }
+        }        
     };
 }
 
-test "ascii tU8s and slice" {
-    const p1 = comptime U8.seq("null");
-    var r1 = p1.parse("null", std.testing.allocator);
-    defer r1.discard();
-    try expectEqual(true, r1.isOk());
-    try expectEqual(4, r1.mov);
-
-    const p2 = comptime U8.seq("null").slice();
-    var r2 = p2.parse("null", std.testing.allocator);
-    defer r2.discard();
-    try expectEqual(true, r2.isOk());
-    try expectEqual(4, r2.mov);
-    try expectEqual("null", try r2.rst);
-}
-
-test "oneMore" {
-    const p1 = comptime U8.one('1').oneMore(U8.one(','));
-
-    try std.testing.expect(p1.parse("1", std.testing.allocator).isOk());
-    try std.testing.expect(!p1.parse("", std.testing.allocator).isOk());
-    try std.testing.expect(p1.parse("1,1,1,1,1,1", std.testing.allocator).isOk());
-    try std.testing.expect(!p1.parse("1,1,1,1,2", std.testing.allocator).isOk());
-
-    const p2 = comptime U8.one('2').oneMore(null);
-    try std.testing.expect(p2.parse("2", std.testing.allocator).isOk());
-    try std.testing.expect(p2.parse("22222222222", std.testing.allocator).isOk());
-    try std.testing.expect(!p2.parse("", std.testing.allocator).isOk());
-}
-
-pub const nop = Void { .parse = struct { const R = Result(void);
-    fn f(_: []const u8, _: std.mem.Allocator) R {
-        return R { .rst = {} };
-    }
-}.f };
-
-pub fn ref(comptime T: type, comptime func: fn() Parser(T)) Parser(T) {
-    return Parser(T) { .parse = struct {
-        fn f(input: []const u8, allocator: std.mem.Allocator) Result(T) {
-            return func().parse(input, allocator);
-        }
-    }.f };
-}
-
-pub fn Sequence(comptime T: type) type {
+pub fn Choice(comptime T: type, comptime E: type) type {
+    comptime if (!isErrorSet(E)) @compileError("Expected error set type, found " ++ @typeName(E));
     return struct {
-        pub fn with(comptime p: Parser(T)) SequenceN(T, 1) {
-            return SequenceN(T, 1) {
-                ._parsers = [1]Parser(T) { p }
+        pub fn with(comptime p: Parser(T, E)) ChoiceN(T, E, 1) {
+            return ChoiceN(T, E, 1) {
+                ._parsers = [1]Parser(T, E) { p }
             };
         }
     };
 }
 
-fn SequenceN(comptime T: type, comptime N: usize) type {
+fn ChoiceN(comptime T: type, comptime E: type, comptime N: usize) type {
+    comptime if (!isErrorSet(E)) @compileError("Expected error set type, found " ++ @typeName(E));
     return struct {
-        _parsers: [N]Parser(T),
+        _parsers: [N]Parser(T, E),
         const Self = @This();
 
-        pub fn with(comptime self: Self, comptime p: Parser(T)) SequenceN(T, N + 1) {
-            return SequenceN(T, N + 1) {
-                ._parsers = self._parsers ++ [1]Parser(T) { p }
+        pub fn with(comptime self: Self, comptime p: Parser(T, E)) ChoiceN(T, E, N + 1) {
+            return ChoiceN(T, E, N + 1) {
+                ._parsers = self._parsers ++ [1]Parser(T, E) { p }
             };
         }
 
-        pub fn build(comptime self: Self) Parser(List(T)) {
-            return Parser(List(T)) { .parse = struct { const R = Result(List(T));
-                fn f(input: []const u8, allocator: std.mem.Allocator) R {        
-                    var list = List(T).init(allocator);
-                    var mov: usize = 0;
-                    var r: Result(T) = undefined;
-                    for (self._parsers) |parser| {
-                        r = parser.parse(input[mov..], allocator);
-                        if (r.rst) |ok| {
-                            list.append(ok) catch {
-                                r.discard();
-                                list.deinit();
-                                return R { .mov = mov, .rst = Err.OutOfMemory };
-                            };
-                            mov += r.mov;
-                        } else |err| {
-                            mov += r.mov;
-                            list.deinit();
-                            return R { .mov = mov, .rst = err };
-                        }
-                    }
-                    return R { .mov = mov, .rst = list };
-                }
-            }.f };
-        }
-    };
-}
-
-pub fn Choice(comptime T: type) type {
-    return struct {
-        pub fn with(comptime p: Parser(T)) ChoiceN(T, 1) {
-            return ChoiceN(T, 1) {
-                ._parsers = [1]Parser(T) { p }
-            };
-        }
-    };
-}
-
-fn ChoiceN(comptime T: type, comptime N: usize) type {
-    return struct {
-        _parsers: [N]Parser(T),
-        const Self = @This();
-
-        pub fn with(comptime self: Self, comptime p: Parser(T)) ChoiceN(T, N + 1) {
-            return ChoiceN(T, N + 1) {
-                ._parsers = self._parsers ++ [1]Parser(T) { p }
-            };
-        }
-
-        pub fn build(comptime self: Self) Parser(T) {
-            return Parser(T) { .parse = struct { const R = Result(T);
+        pub fn build(comptime self: Self) Parser(T, Error||E) {
+            return Parser(T, Error||E) { .parse = struct { const R = Result(T, Error||E);
                 fn f(input: []const u8, allocator: std.mem.Allocator) R {
                     for (self._parsers) |parser| {
-                        const r = parser.parse(input, allocator);
-                        if (r.isOk()) {
-                            return r;
+                        const rst = parser.parse(input, allocator);
+                        if (rst.isOk()) {
+                            return R { .offset = rst.offset, .value = rst.value };
                         }
                     }
-                    return R { .rst = Err.FailedToChoice };
+                    return R { .value = Error.FailedToChoice };
                 }
             }.f };
         }
     };
 }
+
 
 pub const U8 = struct {
-    pub const any = Void { .parse = struct { const R = Result(void);
-        fn f(input: []const u8, _: std.mem.Allocator) R {
-            if (input.len > 0) {
-                return R { .mov = 1, .rst = {} };
-            } else {
-                return R { .rst = Err.EOF };
-            }
-        }
-    }.f };
-
     pub fn one(comptime ch: u8) Void {
-        return Void { .parse = struct { const R = Result(void);
+        return Void { .parse = struct { const R = Result(void, Error);
             fn f(input: []const u8, _: std.mem.Allocator) R {
                 if (input.len == 0) {
-                    return R { .rst = Err.EOF };
+                    return R { .value = Error.EOF };
                 }
                 if (input[0] == ch) {
-                    return R { .mov = 1, .rst = {} };
+                    return R { .offset = 1, .value = {} };
                 } else {
-                    return R { .rst = Err.ExpectForLiteral };
+                    return R { .value = Error.ExpectForLiteral };
                 }
             }
         }.f};
     }
 
-    pub fn choice(comptime set: []const u8) Void {
-        return Void { .parse = struct { const R = Result(void);
+    pub fn set(comptime u8s: []const u8) Void {
+        return Void { .parse = struct { const R = Result(void, Error);
             fn f(input: []const u8, _: std.mem.Allocator) R {
                 if (input.len == 0) {
-                    return R { .rst = Err.EOF };
+                    return R { .value = Error.EOF };
                 }
-                for (set) |ch| {
-                    if (input[0] == ch) return R { .mov = 1, .rst = {} };
+                for (u8s) |ch| {
+                    if (input[0] == ch) return R { .offset = 1, .value = {} };
                 }
-                return R { .rst = Err.ExpectForLiteral };
+                return R { .value = Error.ExpectForLiteral };
             }
         }.f};
     }
 
-    pub fn seq(comptime str: []const u8) Parser(void) {
-        return Parser(void) { .parse = struct { const R = Result(void);
+    pub fn seq(comptime str: []const u8) Void {
+        return Void { .parse = struct { const R = Result(void, Error);
             fn f(input: []const u8, _: std.mem.Allocator) R {
                 if (input.len == 0) {
-                    return R { .rst = Err.EOF };
+                    return R { .value = Error.EOF };
                 }
-
                 if (std.mem.startsWith(u8, input, str)) {
-                    return R { .mov = str.len, .rst = {} };
+                    return R { .offset = str.len, .value = {} };
                 } else {
-                    return R { .rst = Err.ExpectForLiteral };
-                }
-            }
-        }.f };
-    }
-
-    /// `2 <= sys and sys <= 16`
-    pub fn asciiDigit(comptime sys: u8) Void {
-        if (comptime !(2 <= sys and sys <= 16)) unreachable;
-        return Parser(void) { .parse = struct { const R = Result(void);
-            fn f(input: []const u8, _: std.mem.Allocator) R {
-                if (input.len == 0) return R { .rst = Err.EOF };
-                const v: u8 = switch (sys) {
-                    2...10 => if ('0' <= input[0] and input[0] <= (comptime '0' + sys - 1)) input[0] else 0,
-                    else => switch (input[0]) {
-                        '0'...'9', 'a'...('a' + sys - 11), 'A'...('A' + sys - 11) => input[0],
-                        else => 0,
-                    }
-                };
-
-                if (v > 0) {
-                    return R { .mov = 1, .rst = {} };
-                } else {
-                    return R { .rst = Err.ExpectForLiteral };
+                    return R { .value = Error.ExpectForLiteral };
                 }
             }
         }.f };
     }
 };
 
+test "map and mapErr" {
+    // const T: type = Parser(u8, u8);
+    // _ = T;
+    const p1: ParserE(u8) = comptime U8.one('1')
+        .map(u8, struct { fn f(_: *void, _: Allocator) ?u8 {
+            return 1;
+        }}.f)
+    ;
+
+    const p2: ParserE(u8) = comptime U8.one('1')
+        .map(u8, struct { fn f(_: *void, _: Allocator) ?u8 {
+            return null;
+        }}.f)
+    ;
+
+    const NewError = error {
+        IsOne,
+    };
+
+    const p3: Parser(u8, NewError) = comptime p2
+        .mapErr(NewError, struct { fn f(_: Error) NewError {
+            return NewError.IsOne;
+        }}.f)
+    ;
+
+    const p4 = comptime p2.castErr(NewError.IsOne);
+
+    const rst1 = U8.one('1').parse("1", std.testing.allocator);
+    try std.testing.expect(rst1.isOk());
+
+    const rst2 = U8.one('1').parse("", std.testing.allocator);
+    try std.testing.expectError(Error.EOF, rst2.value);
+
+    const rst3 = U8.one('1').parse("2", std.testing.allocator);
+    try std.testing.expectError(Error.ExpectForLiteral, rst3.value);
+
+    const rst4 = p1.parse("1", std.testing.allocator);
+    const v = try rst4.value;
+    try std.testing.expect(v == 1);
+
+    const rst5 = p2.parse("1", std.testing.allocator);
+    try std.testing.expectError(Error.FailedToMap, rst5.value);
+
+    const rst6 = p3.parse("1", std.testing.allocator);
+    try std.testing.expectError(NewError.IsOne, rst6.value);
+
+    const rst7 = p4.parse("1", std.testing.allocator);
+    try std.testing.expectError(NewError.IsOne, rst7.value);
+}
