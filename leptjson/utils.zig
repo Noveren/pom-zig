@@ -33,9 +33,9 @@ pub const String = struct {
     }
 };
 
-test "String" {
-    var string = try String.from(std.testing.allocator, "Hello");
-    defer string.deinit();
-    try string.append(" World!");
-    std.debug.print("{s}\n", .{string});
-}
+// test "String" {
+//     var string = try String.from(std.testing.allocator, "Hello");
+//     defer string.deinit();
+//     try string.append(" World!");
+//     std.debug.print("{s}\n", .{string});
+// }

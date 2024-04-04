@@ -7,6 +7,7 @@ const pom = @import("pom");
 const leptjson = @import("root.zig");
 const Value = leptjson.Value;
 const Error = leptjson.Error;
+const String = leptjson.String;
 
 pub fn parse(input: []const u8, allocator: Allocator) pom.Result(Value, Error||pom.Error) {
     const json: pom.Parser(Value, Error||pom.Error) =
@@ -28,8 +29,9 @@ test "whitespace" {
 }
 
 // ================================================================
-const value: pom.Parser(Value, Error) = pom.Choice(Value, Error)
+const value: pom.Parser(Value, Error||pom.Error) = pom.Choice(Value, Error||pom.Error)
     .withPrefix(literal, pom.U8.set("ntf"))
+    .withPrefix(string, pom.U8.one('"'))
     .withPrefix(number, pom.U8.any)
     .build(Error.ExpectValue)
 ;
@@ -49,12 +51,12 @@ fn genLiteral(comptime Opt: enum { Null, True, False }) fn(*void, std.mem.Alloca
 }
 
 /// `literal <- "null" / "true" / "false"`
-const literal: pom.Parser(Value, Error) = pom.Choice(Value, pom.Error)
+const literal: pom.Parser(Value, Error||pom.Error) = pom.Choice(Value, pom.Error)
     .with(pom.U8.seq("null").map(Value, genLiteral(.Null)))
     .with(pom.U8.seq("true").map(Value, genLiteral(.True)))
     .with(pom.U8.seq("false").map(Value, genLiteral(.False)))
     .build()
-    .castErr(Error.InvalidValue) // pom.Error.FailedToChoice -> Error.InvalidValue
+    .castErr((Error||pom.Error).InvalidValue) // pom.Error.FailedToChoice -> Error.InvalidValue
 ;
 
 test "literal" {
@@ -109,7 +111,7 @@ const tnumber: pom.Void(pom.Error) = pom.Choice(void, pom.Error)
     .build()
 ;
 
-const number: pom.Parser(Value, Error) =
+const number: pom.Parser(Value, Error||pom.Error) =
     tnumber
     .slice()
     .castErr(Error.InvalidValue)
@@ -118,7 +120,7 @@ const number: pom.Parser(Value, Error) =
             break: blk if (std.math.isInf(v)) null else Value { .Number = v };
         } else |_| null;
     }}.f)
-    .mapErr(Error, struct { fn f(e: (pom.Error||Error)) Error {
+    .mapErr(Error||pom.Error, struct { fn f(e: (pom.Error||Error)) (Error||pom.Error) {
         return switch (e) {
             pom.Error.FailedToMap => Error.NumberTooBig,
             else => @errorCast(e)
@@ -170,12 +172,80 @@ test "number" {
     try testNumber("-1.7976931348623157e+308");
 
 }
+// ================================================================
+// string
 
+const escape: pom.Void(Error) =
+    pom.U8.set("\x22\x5C\x2F\x62\x66\x6E\x72\x74")
+    .prefix(pom.U8.one('\x5C'))
+    .castErr(Error.InvalidStringEscape)
+;
 
+const unescape: pom.Void(Error) =
+    pom.U8.any
+    .prefix(pom.U8.set("\x22\x5C").pred(false))
+    .castErr(Error.InvalidStringChar)
+;
+// TODO 实现转义
+const char: pom.Void(Error) = pom.Choice(void, Error)
+    .withPrefix(escape, pom.U8.one('\x5C'))
+    .withPrefix(unescape, pom.nop)
+    .build(Error.InvalidStringChar)
+;
+
+/// tstring <- '"' '"'
+const string: pom.Parser(Value, Error||pom.Error) = char.zeroMoreVoid(null)
+    .prefix(pom.U8.one('\"'))
+    .suffix(pom.U8.one('\"').castErr(Error.MissQuotationMask))
+    .slice()
+    .map(Value, struct { fn f(s: *[]const u8, allocator: Allocator) ?Value {
+        const ss = s.*;
+        const str = String.from(allocator, ss[1..(ss.len-1)]) catch {
+            return null;
+        };
+        return Value { .String = str };
+    }}.f)
+;
+
+test "string" {
+    const testString = struct {
+        fn f(input: []const u8, expect: []const u8) !void {
+            var rst = parse(input, std.testing.allocator);
+            defer rst.discard();
+            {
+                errdefer {
+                    std.debug.print("{any}\n", .{rst.value});
+                }
+                try std.testing.expect(rst.isOk());
+            }
+            var v = try rst.value;
+            try std.testing.expect(v.getType() == .String);
+            const s = v.String;
+            try std.testing.expectEqualStrings(expect, s.memory.items);
+        }
+    }.f;
+    try testString(
+        \\""
+        ,""
+    );
+    try testString(
+        \\"Hello"
+        ,"Hello"
+    );
+    // try testString(
+    //     \\"Hello\nWorld"
+    //     ,"Hello\nWorld"
+    // );
+    // try testString(
+    //     "\"\\\" \\\\ \\/ \\b \\f \\n \\r \\t\""
+    //     ,""
+    // );
+}
 
 // ================================================================
 fn testError(comptime err: Error, input: []const u8) !void {
-    const rst = parse(input, std.testing.allocator);
+    var rst = parse(input, std.testing.allocator);
+    defer rst.discard();
     try std.testing.expectError(err, rst.value);
 }
 
@@ -214,3 +284,20 @@ test "number too big" {
     try testError(Error.NumberTooBig, "1e309");
     try testError(Error.NumberTooBig, "-1e309");
 }
+
+test "missing quotation mark" {
+    try testError(Error.MissQuotationMask, "\"");
+    try testError(Error.MissQuotationMask, "\"abc");
+}
+
+// test "invalid string esacpe" {
+//     try testError(Error.InvalidStringEscape, "\"\\v\"");
+//     try testError(Error.InvalidStringEscape, "\"\\'\"");
+//     try testError(Error.InvalidStringEscape, "\"\\0\"");
+//     try testError(Error.InvalidStringEscape, "\"\\x12\"");
+// }
+
+// test "invalid string char" {
+//     try testError(Error.InvalidStringChar, "\"\x01\"");
+//     try testError(Error.InvalidStringChar, "\"\x1F\"");
+// }
