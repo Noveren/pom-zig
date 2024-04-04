@@ -89,32 +89,24 @@ const integer = pom.Choice(void, pom.Error)
     .prefix(pom.U8.one('-').optional())
 ;
 
-/// `fraction <- '.' dec+`
+/// `fraction <- dec+`
 const fraction: pom.Void(pom.Error) =
-    decOneMore.prefix(pom.U8.one('.'))
+    decOneMore
 ;
 
-// TODO Sequence
-/// `exponent <- ('e' / 'E') ('+' / '-')? dec+`
+/// `exponent <- ('+' / '-')? dec+`
 const exponent: pom.Void(pom.Error) =
-    decOneMore.prefix(pom.U8.set("+-").optional()).prefix(pom.U8.set("eE"))
+    decOneMore.prefix(pom.U8.set("+-").optional())
 ;
 
-/// `tnumber <- initeger fraction? exponent?`
-const tnumber: pom.Void(pom.Error) =
-    integer
-    .suffix(pom.Choice(void, pom.Error)
-        .withPrefix(fraction, pom.U8.one('.'))
-        // TODO optional
-        .withPrefix(pom.nop, pom.nop)
-        .build(pom.Error.FailedToChoice)
-    )
-    .suffix(pom.Choice(void, pom.Error)
-        .withPrefix(exponent, pom.U8.set("eE"))
-        // TODO optional
-        .withPrefix(pom.nop, pom.nop)
-        .build(pom.Error.FailedToChoice)
-    )
+// TODO 实现 Sequence 增强可读性
+/// `tnumber <- integer (!'.' !'e' !'E') / integer '.' fraction (!'e' !'E') / integer ('e' / 'E') exponent / integer '.' fraction ('e' / 'E') exponent`
+const tnumber: pom.Void(pom.Error) = pom.Choice(void, pom.Error)
+    .with(integer.suffix(pom.U8.set(".eE").pred(false)))
+    .with(integer.suffix(pom.U8.one('.')).suffix(fraction).suffix(pom.U8.set("eE").pred(false)))
+    .with(integer.suffix(pom.U8.set("eE")).suffix(exponent))
+    .with(integer.suffix(pom.U8.one('.')).suffix(fraction).suffix(pom.U8.set("eE")).suffix(exponent))
+    .build()
 ;
 
 const number: pom.Parser(Value, Error) =
