@@ -65,6 +65,7 @@ pub fn Result(comptime T: type, comptime E: type) type {
     };
 }
 
+pub const ErrorNop = error {};
 pub const Error = error {
     EOF,
     ExpectForLiteral,
@@ -72,7 +73,7 @@ pub const Error = error {
     FailedToChoice,
     FailedToPred,
     FailedToParse,
-};
+} || ErrorNop;
 
 // fn typeCheckParser(comptime P: type) void {
 //     const err_msg = "Expected pom.Parser(T, E), found '" ++ @typeName(P) ++ "'";
@@ -139,6 +140,21 @@ pub fn Parser(comptime T: type, comptime E: type) type {
                     return R {
                         .offset = rst.offset,
                         .value = if (rst.value) |_| rst.discard() else |err| err,
+                    };
+                }
+            }.f };
+        }
+
+        pub fn slice(comptime self: Self) Parser([]const u8, E) {
+            return Parser([]const u8, E) { .parse = struct { const R = Result([]const u8, E);
+                fn f(input: []const u8, allocator: std.mem.Allocator) R {
+                    var rst = self.parse(input, allocator);
+                    return R {
+                        .offset = rst.offset,
+                        .value = if (rst.value) |_| blk: {
+                            rst.discard();
+                            break :blk input[0..rst.offset];
+                        } else |err| err,
                     };
                 }
             }.f };
@@ -377,6 +393,16 @@ pub fn Parser(comptime T: type, comptime E: type) type {
                 }
             }.f };
         }
+
+        pub fn optional(comptime self: Self) Void(ErrorNop) {
+            return Void(ErrorNop) { .parse = struct { const R = Result(void, ErrorNop);
+                fn f(input: []const u8, allocator: std.mem.Allocator) R {
+                    var rst = self.parse(input, allocator);
+                    rst.discard();
+                    return R { .offset = if (rst.isOk()) rst.offset else 0, .value = {} };
+                }
+            }.f };
+        }
     };
 }
 
@@ -436,7 +462,7 @@ fn ChoicePrefixN(comptime T: type, comptime E: type, comptime N: usize) type {
         pub fn withPrefix(comptime self: Self, comptime p: Parser(T, E), comptime pfx: Void(Error)) ChoicePrefixN(T, E, N + 1) {
             return ChoicePrefixN(T, E, N + 1) {
                 ._parsers = self._parsers ++ [1]Parser(T, E) { p },
-                ._prefixs = self._prefixs ++ [1]?Void(Error) { pfx }
+                ._prefixs = self._prefixs ++ [1]Void(Error) { pfx }
             };
         }
 
@@ -514,7 +540,36 @@ pub const U8 = struct {
             }
         }.f };
     }
+
+    /// `2 <= sys and sys <= 16`
+    pub fn asciiDigit(comptime sys: u8) Void(Error) {
+        if (comptime !(2 <= sys and sys <= 16)) unreachable;
+        return Void(Error) { .parse = struct { const R = Result(void, Error);
+            fn f(input: []const u8, _: std.mem.Allocator) R {
+                if (input.len == 0) return R { .value = Error.EOF };
+                const v: u8 = switch (sys) {
+                    2...10 => if ('0' <= input[0] and input[0] <= (comptime '0' + sys - 1)) input[0] else 0,
+                    else => switch (input[0]) {
+                        '0'...'9', 'a'...('a' + sys - 11), 'A'...('A' + sys - 11) => input[0],
+                        else => 0,
+                    }
+                };
+
+                if (v > 0) {
+                    return R { .offset = 1, .value = {} };
+                } else {
+                    return R { .value = Error.ExpectForLiteral };
+                }
+            }
+        }.f };
+    }
 };
+
+pub const nop = Void(Error) { .parse = struct { const R = Result(void, Error);
+    fn f(_: []const u8, _: std.mem.Allocator) R {
+        return R { .value = {} };
+    }
+}.f };
 
 test "map and mapErr" {
     // const T: type = Parser(u8, u8);
