@@ -8,14 +8,19 @@ const leptjson = @import("root.zig");
 const Value = leptjson.Value;
 const Error = leptjson.Error;
 
-// pub fn parse(input: []const u8, allocator: Allocator) !Value {
-//     _ = input;
-//     _ = allocator;
-// }
+pub fn parse(input: []const u8, allocator: Allocator) pom.Result(Value, Error||pom.Error) {
+    const json: pom.Parser(Value, Error||pom.Error) =
+        comptime value
+            .prefix(wsZeroMore)
+            .suffix(wsZeroMore)
+            .suffix(pom.U8.any.pred(false).castErr(Error.RootNotSingular))
+    ;
+    return json.parse(input, allocator);
+}
 
 // ================================================================
 const ws: pom.VoidE = pom.U8.set("\x20\x09\x0A\x0D");
-const wsZeroMore: pom.VoidE = ws.zeroMore(null).discard();
+const wsZeroMore: pom.Void(pom.Error) = ws.zeroMoreVoid(null);
 
 test "whitespace" {
     const rst1 = wsZeroMore.parse("     ", std.testing.allocator);
@@ -23,6 +28,7 @@ test "whitespace" {
 }
 
 // ================================================================
+
 const value: pom.Parser(Value, Error) = pom.Choice(Value, Error)
     .withPrefix(literal, pom.U8.set("ntf"))
     .build(Error.ExpectValue)
@@ -50,9 +56,24 @@ const literal: pom.Parser(Value, Error) = pom.Choice(Value, pom.Error)
     .castErr(Error.InvalidValue) // pom.Error.FailedToChoice -> Error.InvalidValue
 ;
 
+// ================================================================
 test "literal" {
-    const rst1 = literal.parse("null", std.testing.allocator);
-    try std.testing.expect(rst1.isOk());
+    const testLiteral = struct {
+        fn f(input: []const u8, comptime mode: enum { Null, True, False }) !void {
+            const rst = parse(input, std.testing.allocator);
+            try std.testing.expect(rst.isOk());
+            const v: Value = try rst.value;
+            try std.testing.expect(switch (mode) {
+                .Null  => v.getType() == .Null,
+                .True  => v.getType() == .Boolean and v.Boolean == true,
+                .False => v.getType() == .Boolean and v.Boolean == false,
+            });
+        }
+    }.f;
+
+    try testLiteral("null", .Null);
+    try testLiteral("true", .True);
+    try testLiteral("false", .False);
 
     const rst2 = literal.parse("nul", std.testing.allocator);
     try std.testing.expectError(Error.InvalidValue, rst2.value);
@@ -60,12 +81,23 @@ test "literal" {
 
     const rst3 = value.parse("nul", std.testing.allocator);
     try std.testing.expectError(Error.InvalidValue, rst3.value);
-
-    const rst4 = value.parse("", std.testing.allocator);
-    try std.testing.expectError(Error.ExpectValue, rst4.value);
 }
 
-// ================================================================
-test "null" {
-    try std.testing.expect(true);
+fn testError(comptime err: Error, input: []const u8) !void {
+    const rst = parse(input, std.testing.allocator);
+    try std.testing.expectError(err, rst.value);
+}
+
+test "expect value" {
+    try testError(Error.ExpectValue, "");
+    try testError(Error.ExpectValue, "  \n  \t  \r    ");
+}
+
+test "invalid value" {
+    try testError(Error.InvalidValue, "nul");
+    // try testError(Error.InvalidValue, "?");
+}
+
+test "rootNotSingular" {
+    try testError(Error.RootNotSingular, "null ?");
 }

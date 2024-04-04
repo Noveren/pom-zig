@@ -3,11 +3,6 @@ const std = @import("std");
 
 const parser = @import("parser.zig");
 
-test {
-    std.testing.refAllDecls(parser);
-    _ = parser;
-}
-
 pub const Type = enum {
     Null, Boolean,
 };
@@ -29,14 +24,14 @@ pub const Error = error {
     ExpectValue,
     InvalidValue,
     RootNotSingular,
-    NumberTooBig,
-    MissQuotationMask,
-    InvalidStringEscape,
-    InvalidStringChar,
-    InvalidUnicodeHex,
-    InvalidUnicodeSurrogate,
-    MissCommaOrSquareBracket,
-    MissKey,
-    MissColon,
-    MissCommaOrCurlyBracket,
+    // NumberTooBig,
+    // MissQuotationMask,
+    // InvalidStringEscape,
+    // InvalidStringChar,
+    // InvalidUnicodeHex,
+    // InvalidUnicodeSurrogate,
+    // MissCommaOrSquareBracket,
+    // MissKey,
+    // MissColon,
+    // MissCommaOrCurlyBracket,
 };
