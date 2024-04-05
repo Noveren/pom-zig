@@ -221,7 +221,7 @@ pub fn castSupE(comptime self: Self, comptime SupE: type) Parser(T, SupE) {
             const rst = self.parse(input, allocator);
             return R {
                 .offset = rst.offset,
-                .value  = if (rst.value) |ok| ok else |err| @errorCast(err),
+                .value  = if (rst.value) |ok| ok else |err| err,
             };
         }
     }.f };
@@ -469,7 +469,7 @@ test "one" {
     const v = try rst.value;
     try std.testing.expectEqualStrings("1,1,1", v);
 }
-
+// TODO 将 Choice 和 ChoicePrefix 提出 Parser
 const pp = Parser(void, pom.Error).Choice()
     .with(pom.U8.one('1'))
     .with(pom.U8.one('2'))
