@@ -621,3 +621,11 @@ test "map and mapErr" {
     const rst7 = p4.parse("1", std.testing.allocator);
     try std.testing.expectError(NewError.IsOne, rst7.value);
 }
+
+// test "error" {
+//     const E1 = error { E1 };
+//     const E2 = error { E };
+//     const E3 = E1 || E2;
+//     comptime @compileError(@typeName(E3));
+//     _ = E3.E catch 8;
+// }
