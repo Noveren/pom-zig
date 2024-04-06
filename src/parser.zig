@@ -33,7 +33,7 @@ pub fn Result(comptime T: type, comptime E: type) type {
     };
 }
 
-fn isParser(comptime P: type) bool {
+pub fn isParser(comptime P: type) bool {
     return @typeInfo(P) == .Struct
         and @hasDecl(P, "TypeT")
         and @hasDecl(P, "TypeE")
@@ -41,12 +41,12 @@ fn isParser(comptime P: type) bool {
     ;
 }
 
-fn assertParser(comptime P: type) void {
+pub fn assertParser(comptime P: type) void {
     const err_msg = "Expected pom.Parser(T, E), found '" ++ @typeName(P) ++ "'";
     if (!isParser(P)) @compileError(err_msg);
 }
 
-fn assertParserT(comptime P: type, comptime T: type) void {
+pub fn assertParserT(comptime P: type, comptime T: type) void {
     const err_msg = "Expected pom.Parser(void, " ++ @typeName(T) ++ "), found '" ++ @typeName(P) ++ "'";
     if (!isParser(P) or P.TypeT != T) @compileError(err_msg);
 }
@@ -283,9 +283,8 @@ fn manyCollect(comptime self: Self, comptime sep: anytype, comptime mode: u8, co
 /// `sep: ?Parser(void, AnyError)`
 fn many(comptime self: Self, comptime sep: anytype, comptime mode: u8, comptime N: usize) Parser(void, E) {
     comptime var sep_is_not_null: bool = false;
-    comptime switch (@typeInfo(@TypeOf(sep))) {
-        else => { assertParserT(@TypeOf(sep), void); sep_is_not_null = true; },
-        .Optional => if (sep != null) unreachable,
+    comptime if (@TypeOf(sep) != @TypeOf(null)) {
+        assertParserT(@TypeOf(sep), void); sep_is_not_null = true; 
     };
     return Parser(void, E) { .parse = struct { const R = Result(void, E);
         fn f(input: []const u8, allocator: std.mem.Allocator) R {

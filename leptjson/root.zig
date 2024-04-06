@@ -35,6 +35,7 @@ pub const Value = union(Type) {
 };
 
 pub const Error = error {
+    NOP,
     ExpectValue,
     InvalidValue,
     RootNotSingular,

@@ -1,7 +1,7 @@
 
 test:
-    zig test ./src/root.zig
-#   && zig test --dep pom -Mroot=./leptjson/parser.zig -Mpom=./src/root-bak-bak.zig
+    zig test ./src/root.zig \
+    && zig test --dep pom -Mroot=./leptjson/parser.zig -Mpom=./src/root.zig
 
 # test_bak:
 #     zig test -ODebug \
